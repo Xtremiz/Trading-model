@@ -11,7 +11,7 @@ from sklearn.metrics import (
 )
 
 
-df = pd.read_csv(r"C:\Users\fozan\OneDrive\Desktop\Code\Data\Block=2 prep\goldthresold0.5.csv")
+df = pd.read_csv(r"C:\Users\fozan\OneDrive\Desktop\Code\Data\Block=2 prep\goldthresold0.5_norm.csv")
 df = df.dropna()
 
 signal_mapping = {

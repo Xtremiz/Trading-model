@@ -1,7 +1,7 @@
 from sklearn.preprocessing import RobustScaler
 import pandas as pd
 
-path = r"F:\Git-Hub\Trading model\Block-2\goldthresold0.3.csv"
+path = r"F:\Git-Hub\Trading model\Block-2\goldthresold0.5.csv"
 
 df = pd.read_csv(path)
 
