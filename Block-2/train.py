@@ -195,302 +195,11 @@ class_weights = torch.tensor(
 ).to(device)
 
 
-print("\nClass Weights:")
-
-for cls, weight in zip(
-    classes,
-    class_weights
-):
-
-    print(
-        f"{cls}: {weight.item():.4f}"
-    )
 
 
 # ==========================================
 # OPTUNA CNN
 # ==========================================
-
-class OptunaCNN(nn.Module):
-
-    def __init__(
-        self,
-        num_features,
-        trial
-    ):
-
-        super().__init__()
-
-
-        # ==================================
-        # CONVOLUTION SETTINGS
-        # ==================================
-
-        n_conv_layers = trial.suggest_int(
-            "n_conv_layers",
-            1,
-            4
-        )
-
-
-        conv_layers = []
-
-        in_channels = num_features
-
-
-        for i in range(
-            n_conv_layers
-        ):
-
-            out_channels = trial.suggest_categorical(
-                f"conv_{i}_channels",
-                [
-                    16,
-                    32,
-                    64,
-                    128,
-                    256
-                ]
-            )
-
-
-            kernel_size = trial.suggest_categorical(
-                f"conv_{i}_kernel",
-                [
-                    3,
-                    5,
-                    7
-                ]
-            )
-
-
-            use_batchnorm = trial.suggest_categorical(
-                f"conv_{i}_batchnorm",
-                [
-                    True,
-                    False
-                ]
-            )
-
-
-            conv_layers.append(
-
-                nn.Conv1d(
-                    in_channels=in_channels,
-                    out_channels=out_channels,
-                    kernel_size=kernel_size,
-                    padding=kernel_size // 2
-                )
-
-            )
-
-
-            if use_batchnorm:
-
-                conv_layers.append(
-                    nn.BatchNorm1d(
-                        out_channels
-                    )
-                )
-
-
-            conv_layers.append(
-                nn.ReLU()
-            )
-
-
-            # ==================================
-            # POOLING
-            # ==================================
-
-            use_pool = trial.suggest_categorical(
-                f"conv_{i}_pool",
-                [
-                    True,
-                    False
-                ]
-            )
-
-
-            if use_pool:
-
-                pool_size = trial.suggest_categorical(
-                    f"conv_{i}_pool_size",
-                    [
-                        2,
-                        3
-                    ]
-                )
-
-                conv_layers.append(
-                    nn.MaxPool1d(
-                        kernel_size=pool_size,
-                        stride=pool_size
-                    )
-                )
-
-
-            in_channels = out_channels
-
-
-        self.features = nn.Sequential(
-            *conv_layers
-        )
-
-
-        # ==================================
-        # GLOBAL POOLING
-        # ==================================
-
-        self.global_pool = nn.AdaptiveAvgPool1d(
-            1
-        )
-
-
-        # ==================================
-        # LINEAR HIDDEN LAYERS
-        # ==================================
-
-        n_linear_layers = trial.suggest_int(
-            "n_linear_layers",
-            1,
-            4
-        )
-
-
-        linear_layers = []
-
-        linear_input = in_channels
-
-
-        for i in range(
-            n_linear_layers
-        ):
-
-            hidden_size = trial.suggest_categorical(
-                f"linear_{i}_size",
-                [
-                    32,
-                    64,
-                    128,
-                    256,
-                    512
-                ]
-            )
-
-
-            linear_layers.append(
-                nn.Linear(
-                    linear_input,
-                    hidden_size
-                )
-            )
-
-
-            activation = trial.suggest_categorical(
-                f"linear_{i}_activation",
-                [
-                    "relu",
-                    "gelu",
-                    "silu"
-                ]
-            )
-
-
-            if activation == "relu":
-
-                linear_layers.append(
-                    nn.ReLU()
-                )
-
-            elif activation == "gelu":
-
-                linear_layers.append(
-                    nn.GELU()
-                )
-
-            else:
-
-                linear_layers.append(
-                    nn.SiLU()
-                )
-
-
-            use_dropout = trial.suggest_categorical(
-                f"linear_{i}_dropout",
-                [
-                    True,
-                    False
-                ]
-            )
-
-
-            if use_dropout:
-
-                dropout = trial.suggest_float(
-                    f"linear_{i}_dropout_rate",
-                    0.1,
-                    0.5
-                )
-
-                linear_layers.append(
-                    nn.Dropout(
-                        dropout
-                    )
-                )
-
-
-            linear_input = hidden_size
-
-
-        # ==================================
-        # OUTPUT
-        # ==================================
-
-        linear_layers.append(
-            nn.Linear(
-                linear_input,
-                3
-            )
-        )
-
-
-        self.classifier = nn.Sequential(
-            *linear_layers
-        )
-
-
-    def forward(
-        self,
-        x
-    ):
-
-        # (batch, 50, features)
-
-        x = x.permute(
-            0,
-            2,
-            1
-        )
-
-        # (batch, features, 50)
-
-        x = self.features(x)
-
-        # (batch, channels, sequence)
-
-        x = self.global_pool(x)
-
-        # (batch, channels, 1)
-
-        x = x.squeeze(-1)
-
-        # (batch, channels)
-
-        x = self.classifier(x)
-
-        return x
-
 
 # ==========================================
 # OPTUNA OBJECTIVE
@@ -498,21 +207,109 @@ class OptunaCNN(nn.Module):
 
 def objective(trial):
 
+    # ======================================
+    # HYPERPARAMETERS
+    # ======================================
 
-    # ==================================
-    # BATCH SIZE
-    # ==================================
+    learning_rate = trial.suggest_float(
+        "learning_rate",
+        2.5e-3,
+        9e-3,
+        log=True
+    )
 
     batch_size = trial.suggest_categorical(
         "batch_size",
-        [
-            16,
-            32,
-            64,
-            128
-        ]
+        [ 32, 64]
     )
 
+    epochs = trial.suggest_categorical(
+        "epochs",
+        [50,75,100]
+    )
+
+    # ======================================
+    # CLASS WEIGHTS
+    # ======================================
+
+    hold_weight = trial.suggest_float(
+        "hold_weight",
+        0.7,
+        0.9,
+        step=0.05
+    )
+
+    buy_weight = trial.suggest_float(
+        "buy_weight",
+        1.9,
+        2.3,
+        step=0.05
+    )
+
+    sell_weight = trial.suggest_float(
+        "sell_weight",
+        2.6,
+        3.3,
+        step=0.05
+    )
+
+    class_weights = torch.tensor(
+        [
+            hold_weight,
+            buy_weight,
+            sell_weight
+        ],
+        dtype=torch.float32,
+        device=device
+    )
+
+    # ======================================
+    # CNN HYPERPARAMETERS
+    # ======================================
+
+    conv1_channels = trial.suggest_categorical(
+        "conv1_channels",
+        [ 32, 64]
+    )
+
+    conv2_channels = trial.suggest_categorical(
+        "conv2_channels",
+        [64, 128]
+    )
+
+    kernel_size = trial.suggest_categorical(
+        "kernel_size",
+        [3, 5]
+    )
+
+    dropout = trial.suggest_categorical(
+        "dropout",
+       [0.1, 0.2, 0.3]
+    )
+
+    linear1 = trial.suggest_categorical(
+        "linear1",
+        [ 128, 256]
+    )
+
+    linear2 = trial.suggest_categorical(
+        "linear2",
+        [64, 128]
+    )
+
+    # ======================================
+    # DATA LOADERS
+    # ======================================
+
+    train_data = CustomDataset(
+        X_train,
+        y_train
+    )
+
+    test_data = CustomDataset(
+        X_test,
+        y_test
+    )
 
     train_loader = DataLoader(
         train_data,
@@ -521,7 +318,6 @@ def objective(trial):
         pin_memory=True
     )
 
-
     test_loader = DataLoader(
         test_data,
         batch_size=batch_size,
@@ -529,112 +325,165 @@ def objective(trial):
         pin_memory=True
     )
 
+    # ======================================
+    # CNN MODEL
+    # ======================================
 
-    # ==================================
-    # MODEL
-    # ==================================
+    class OptunaCNN(nn.Module):
+
+        def __init__(self, num_features):
+
+            super().__init__()
+
+            self.features = nn.Sequential(
+
+                nn.Conv1d(
+                    in_channels=num_features,
+                    out_channels=conv1_channels,
+                    kernel_size=kernel_size,
+                    padding=kernel_size // 2
+                ),
+
+                nn.ReLU(),
+
+                nn.BatchNorm1d(
+                    conv1_channels
+                ),
+
+                nn.MaxPool1d(
+                    kernel_size=2,
+                    stride=2
+                ),
+
+                nn.Conv1d(
+                    in_channels=conv1_channels,
+                    out_channels=conv2_channels,
+                    kernel_size=kernel_size,
+                    padding=kernel_size // 2
+                ),
+
+                nn.ReLU(),
+
+                nn.BatchNorm1d(
+                    conv2_channels
+                ),
+
+                nn.MaxPool1d(
+                    kernel_size=2,
+                    stride=2
+                )
+            )
+
+            # 50 -> 25 -> 12
+            flattened_size = (
+                conv2_channels * 12
+            )
+
+            self.classifier = nn.Sequential(
+
+                nn.Flatten(),
+
+                nn.Linear(
+                    flattened_size,
+                    linear1
+                ),
+
+                nn.ReLU(),
+
+                nn.Dropout(
+                    dropout
+                ),
+
+                nn.Linear(
+                    linear1,
+                    linear2
+                ),
+
+                nn.ReLU(),
+
+                nn.Dropout(
+                    dropout
+                ),
+
+                nn.Linear(
+                    linear2,
+                    3
+                )
+            )
+
+        def forward(self, x):
+
+            # (batch, 50, features)
+
+            x = x.permute(
+                0,
+                2,
+                1
+            )
+
+            # (batch, features, 50)
+
+            x = self.features(x)
+
+            x = self.classifier(x)
+
+            return x
+
+    # ======================================
+    # CREATE MODEL
+    # ======================================
+
+    num_features = X_train.shape[2]
 
     model = OptunaCNN(
-        num_features=X_train.shape[2],
-        trial=trial
+        num_features
     ).to(device)
 
-
-    # ==================================
-    # LEARNING RATE
-    # ==================================
-
-    learning_rate = trial.suggest_float(
-        "learning_rate",
-        1e-5,
-        3e-3,
-        log=True
-    )
-
-
-    # ==================================
-    # WEIGHT DECAY
-    # ==================================
-
-    weight_decay = trial.suggest_float(
-        "weight_decay",
-        1e-7,
-        1e-3,
-        log=True
-    )
-    epochs = trial.suggest_int(
-        "epochs",20,50,step=10
-    )
-
-    # ==================================
-    # OPTIMIZER
-    # ==================================
-
-    optimizer_name = trial.suggest_categorical(
-        "optimizer",
-        [
-            "Adam",
-            "AdamW",
-            "RMSprop"
-        ]
-    )
-
-
-    if optimizer_name == "Adam":
-
-        optimizer = torch.optim.Adam(
-            model.parameters(),
-            lr=learning_rate,
-            weight_decay=weight_decay
-        )
-
-
-    elif optimizer_name == "AdamW":
-
-        optimizer = torch.optim.AdamW(
-            model.parameters(),
-            lr=learning_rate,
-            weight_decay=weight_decay
-        )
-
-
-    else:
-
-        optimizer = torch.optim.RMSprop(
-            model.parameters(),
-            lr=learning_rate,
-            weight_decay=weight_decay
-        )
-
-
-    # ==================================
+    # ======================================
     # LOSS
-    # ==================================
+    # ======================================
 
     criterion = nn.CrossEntropyLoss(
         weight=class_weights
     )
 
+    # ======================================
+    # OPTIMIZER
+    # ======================================
 
-    # ==================================
-    # EPOCHS
-    # ==================================
+    optimizer_name = trial.suggest_categorical(
+        "optimizer",
+        [
+            "AdamW",
+            "RMSprop"
+        ]
+    )
 
-    
+   
 
+    if optimizer_name == "AdamW":
 
-    # ==================================
+        optimizer = torch.optim.AdamW(
+            model.parameters(),
+            lr=learning_rate
+        )
+
+    else:
+
+        optimizer = torch.optim.RMSprop(
+            model.parameters(),
+            lr=learning_rate
+        )
+
+    # ======================================
     # TRAINING
-    # ==================================
+    # ======================================
 
-    for epoch in range(
-        epochs
-    ):
+    for epoch in range(epochs):
 
         model.train()
 
         total_loss = 0
-
 
         for batch_features, batch_labels in train_loader:
 
@@ -648,114 +497,168 @@ def objective(trial):
                 non_blocking=True
             )
 
-
             optimizer.zero_grad()
-
 
             outputs = model(
                 batch_features
             )
-
 
             loss = criterion(
                 outputs,
                 batch_labels
             )
 
-
             loss.backward()
 
             optimizer.step()
 
-
             total_loss += loss.item()
 
+    # ======================================
+    # VALIDATION / TEST
+    # ======================================
 
-        # ==================================
-        # VALIDATION
-        # ==================================
+    model.eval()
 
-        model.eval()
+    all_labels = []
+    all_predictions = []
 
-        all_labels = []
-        all_predictions = []
+    with torch.no_grad():
 
+        for batch_features, batch_labels in test_loader:
 
-        with torch.no_grad():
+            batch_features = batch_features.to(
+                device,
+                non_blocking=True
+            )
 
-            for batch_features, batch_labels in test_loader:
+            outputs = model(
+                batch_features
+            )
 
-                batch_features = batch_features.to(
-                    device,
-                    non_blocking=True
-                )
+            _, predicted = torch.max(
+                outputs,
+                1
+            )
 
-                outputs = model(
-                    batch_features
-                )
+            all_labels.extend(
+                batch_labels.numpy()
+            )
 
+            all_predictions.extend(
+                predicted.cpu().numpy()
+            )
 
-                predictions = torch.argmax(
-                    outputs,
-                    dim=1
-                )
+    # ======================================
+    # BALANCED ACCURACY
+    # ======================================
 
+    balanced_accuracy = balanced_accuracy_score(
+        all_labels,
+        all_predictions
+    )
 
-                all_labels.extend(
-                    batch_labels.numpy()
-                )
+    raw_accuracy = accuracy_score(
+        all_labels,
+        all_predictions
+    )
 
-                all_predictions.extend(
-                    predictions.cpu().numpy()
-                )
+    print(
+        f"\nTrial {trial.number}"
+    )
 
+    print(
+        f"Raw Accuracy: "
+        f"{raw_accuracy * 100:.2f}%"
+    )
 
-        balanced_accuracy = balanced_accuracy_score(
-            all_labels,
-            all_predictions
+    print(
+        f"Balanced Accuracy: "
+        f"{balanced_accuracy * 100:.2f}%"
+    )
+
+    print(
+        f"Weights: "
+        f"HOLD={hold_weight:.1f}, "
+        f"BUY={buy_weight:.1f}, "
+        f"SELL={sell_weight:.1f}"
+    )
+
+    # ======================================
+    # SAVE BEST MODEL
+    # ======================================
+
+    if balanced_accuracy > objective.best_score:
+
+        objective.best_score = balanced_accuracy
+
+        torch.save(
+            {
+                "model_state_dict":
+                    model.state_dict(),
+
+                "balanced_accuracy":
+                    balanced_accuracy,
+
+                "raw_accuracy":
+                    raw_accuracy,
+
+                "params":
+                    trial.params,
+
+                "class_weights":
+                    [
+                        hold_weight,
+                        buy_weight,
+                        sell_weight
+                    ],
+
+                "num_features":
+                    num_features,
+
+                "sequence_length":
+                    sequence_length
+            },
+
+            "best_cnn_model.pt"
         )
 
-
-        # ==================================
-        # OPTUNA PRUNING
-        # ==================================
-
-        trial.report(
-            balanced_accuracy,
-            epoch
+        print(
+            "\n🔥 NEW BEST MODEL SAVED!"
         )
 
-
-        if trial.should_prune():
-
-            raise optuna.TrialPruned()
-
+        print(
+            f"Balanced Accuracy: "
+            f"{balanced_accuracy * 100:.2f}%"
+        )
 
     return balanced_accuracy
 
 
 # ==========================================
-# CREATE STUDY
+# INITIAL BEST SCORE
+# ==========================================
+
+objective.best_score = -float("inf")
+
+
+# ==========================================
+# OPTUNA STUDY
 # ==========================================
 
 study = optuna.create_study(
-    direction="maximize",
-    study_name="Gold_CNN_Optimization"
+    direction="maximize"
 )
 
-
-# ==========================================
-# START OPTIMIZATION
-# ==========================================
 
 study.optimize(
     objective,
-    n_trials=50
+    n_trials=60
 )
 
 
 # ==========================================
-# BEST RESULT
+# FINAL RESULTS
 # ==========================================
 
 print(
@@ -770,15 +673,14 @@ print(
     "================================"
 )
 
-
 print(
-    "\nBest Balanced Accuracy:",
-    study.best_value
+    f"Best Balanced Accuracy: "
+    f"{study.best_value * 100:.2f}%"
 )
 
 
 print(
-    "\nBest Hyperparameters:"
+    "\nBEST PARAMETERS:"
 )
 
 
@@ -787,3 +689,12 @@ for key, value in study.best_params.items():
     print(
         f"{key}: {value}"
     )
+
+
+print(
+    "\nBest model saved as:"
+)
+
+print(
+    "best_cnn_model.pt"
+)
