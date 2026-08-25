@@ -56,9 +56,11 @@ df["signal"] = df["signal"].map(
 # FEATURES / LABELS
 # ==========================================
 
-X = df.drop(
+feature_names = df.drop(
     columns=["signal"]
-).values
+).columns.tolist()
+
+X = df[feature_names].values
 
 y = df["signal"].values
 
@@ -603,35 +605,102 @@ def objective(trial):
         objective.best_score = balanced_accuracy
 
         torch.save(
-            {
-                "model_state_dict":
-                    model.state_dict(),
+    {
+        # ==========================================
+        # MODEL
+        # ==========================================
 
-                "balanced_accuracy":
-                    balanced_accuracy,
+        "model_state_dict":
+            model.state_dict(),
 
-                "raw_accuracy":
-                    raw_accuracy,
+        # ==========================================
+        # INPUT INFORMATION
+        # ==========================================
 
-                "params":
-                    trial.params,
+        "input_size":
+            num_features,
 
-                "class_weights":
-                    [
-                        hold_weight,
-                        buy_weight,
-                        sell_weight
-                    ],
+        "feature_names":
+            feature_names,
 
-                "num_features":
-                    num_features,
+        "sequence_length":
+            sequence_length,
 
-                "sequence_length":
-                    sequence_length
-            },
+        # ==========================================
+        # CLASS INFORMATION
+        # ==========================================
 
-            "best_cnn_model.pt"
-        )
+        "class_mapping":
+            signal_mapping,
+
+        "class_weights":
+            [
+                hold_weight,
+                buy_weight,
+                sell_weight
+            ],
+
+        # ==========================================
+        # CNN ARCHITECTURE
+        # ==========================================
+
+        "conv1_channels":
+            conv1_channels,
+
+        "conv2_channels":
+            conv2_channels,
+
+        "kernel_size":
+            kernel_size,
+
+        "dropout":
+            dropout,
+
+        "linear1":
+            linear1,
+
+        "linear2":
+            linear2,
+
+        # ==========================================
+        # TRAINING PARAMETERS
+        # ==========================================
+
+        "learning_rate":
+            learning_rate,
+
+        "batch_size":
+            batch_size,
+
+        "epochs":
+            epochs,
+
+        "optimizer":
+            optimizer_name,
+
+        # ==========================================
+        # OPTUNA PARAMETERS
+        # ==========================================
+
+        "best_hyperparameters":
+            trial.params,
+
+        # ==========================================
+        # PERFORMANCE
+        # ==========================================
+
+        "validation_balanced_accuracy":
+            balanced_accuracy,
+
+        "validation_accuracy":
+            raw_accuracy,
+
+        "best_epoch":
+            epoch + 1
+
+    },
+
+    "best_cnn_model.pt")
 
         print(
             "\n🔥 NEW BEST MODEL SAVED!"
