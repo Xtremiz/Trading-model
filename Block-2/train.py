@@ -1,6 +1,6 @@
 import torch
 import torch.nn as nn
-from torch.utils.data import DataLoader, Dataset
+from torch.utils.data import DataLoader, Dataset,WeightedRandomSampler
 
 from sklearn.model_selection import train_test_split
 from sklearn.metrics import (
@@ -118,6 +118,16 @@ X_train, X_test, y_train, y_test = train_test_split(
     shuffle=True
 )
 
+class_counts = np.bincount(y_train)
+
+class_weights = 1.0 / class_counts
+sample_weights = class_weights[y_train]
+
+sampler = WeightedRandomSampler(
+    weights=torch.DoubleTensor(sample_weights),
+    num_samples=len(y_train),
+    replacement=True
+)
 
 # ==========================================
 # CUSTOM DATASET
@@ -220,12 +230,12 @@ def objective(trial):
 
     batch_size = trial.suggest_categorical(
         "batch_size",
-        [ 32, 64]
+        [32, 64]
     )
 
     epochs = trial.suggest_categorical(
         "epochs",
-        [50,75,100]
+        [50]
     )
 
     # ======================================
@@ -234,22 +244,22 @@ def objective(trial):
 
     hold_weight = trial.suggest_float(
         "hold_weight",
-        0.7,
-        0.9,
+        0.6,
+        0.8,
         step=0.05
     )
 
     buy_weight = trial.suggest_float(
         "buy_weight",
         1.9,
-        2.3,
+        2.2,
         step=0.05
     )
 
     sell_weight = trial.suggest_float(
         "sell_weight",
-        2.6,
-        3.3,
+        2.7,
+        3.2,
         step=0.05
     )
 
@@ -314,7 +324,7 @@ def objective(trial):
     train_loader = DataLoader(
         train_data,
         batch_size=batch_size,
-        shuffle=True,
+        sampler=sampler,
         pin_memory=True
     )
 
