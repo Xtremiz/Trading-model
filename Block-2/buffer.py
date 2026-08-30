@@ -1,18 +1,18 @@
 import time
 import threading
 from collections import deque
+
 import MetaTrader5 as mt5
 import pandas as pd
 import numpy as np
 import torch
 import torch.nn as nn
 
+
 # ==========================================
 # IMPORT YOUR PIPELINE
 # ==========================================
 
-# Agar tumhari pipeline.py mein function ka naam
-# pipeline hai to ye sahi hai:
 from pipeline import pipeline
 
 
@@ -35,9 +35,9 @@ from tradingfunc import (
 SYMBOL = "GOLD"
 
 TIMEFRAME = mt5.TIMEFRAME_M15
+
 BUFFER_SIZE = 60
 
-# Kitni frequently new candle check karni hai
 CHECK_INTERVAL = 1
 
 MODEL_PATH = r"F:\Git-Hub\Trading model\models\best_gold_ann_model.pt"
@@ -46,9 +46,24 @@ DEVICE = torch.device(
     "cuda" if torch.cuda.is_available() else "cpu"
 )
 
-# False = sirf prediction
+
+# ==========================================
+# TRADE EXECUTION
+# ==========================================
+
+# False = prediction only
 # True = real trade execution
 EXECUTE_TRADE = False
+
+
+# ==========================================
+# PROBABILITY THRESHOLD
+# ==========================================
+
+# Signal tabhi accept hoga jab
+# kisi class ki probability 70% se ZYADA ho.
+
+MIN_PROBABILITY = 0.70
 
 
 # ==========================================
@@ -59,60 +74,121 @@ EXECUTE_TRADE = False
 class MyNN(nn.Module):
 
     def __init__(self, num_features):
+
         super().__init__()
 
         self.model = nn.Sequential(
 
             # 87 -> 32
-            nn.Linear(num_features, 32),
+            nn.Linear(
+                num_features,
+                32
+            ),
+
             nn.BatchNorm1d(32),
+
             nn.ReLU(),
+
             nn.Dropout(0.3),
+
 
             # 32 -> 256
-            nn.Linear(32, 256),
+            nn.Linear(
+                32,
+                256
+            ),
+
             nn.BatchNorm1d(256),
+
             nn.ReLU(),
+
             nn.Dropout(0.3),
+
 
             # 256 -> 512
-            nn.Linear(256, 512),
+            nn.Linear(
+                256,
+                512
+            ),
+
             nn.BatchNorm1d(512),
+
             nn.ReLU(),
+
             nn.Dropout(0.3),
+
 
             # 512 -> 64
-            nn.Linear(512, 64),
+            nn.Linear(
+                512,
+                64
+            ),
+
             nn.BatchNorm1d(64),
+
             nn.ReLU(),
+
             nn.Dropout(0.3),
+
 
             # 64 -> 128
-            nn.Linear(64, 128),
+            nn.Linear(
+                64,
+                128
+            ),
+
             nn.BatchNorm1d(128),
+
             nn.ReLU(),
+
             nn.Dropout(0.3),
 
+
             # 128 -> 3
-            nn.Linear(128, 3)
+            nn.Linear(
+                128,
+                3
+            )
         )
 
+
     def forward(self, x):
+
         return self.model(x)
 
-print("Using device:", DEVICE)
+
+# ==========================================
+# DEVICE
+# ==========================================
+
+print(
+    "Using device:",
+    DEVICE
+)
+
+
+# ==========================================
+# LOAD CHECKPOINT
+# ==========================================
 
 try:
 
     checkpoint = torch.load(
+
         MODEL_PATH,
+
         map_location=DEVICE,
+
         weights_only=False
+
     )
 
 except Exception as e:
 
-    print("Model loading failed:")
+    print(
+        "Model loading failed:"
+    )
+
     print(e)
 
     raise SystemExit
@@ -128,23 +204,27 @@ feature_names = checkpoint["feature_names"]
 
 class_mapping = checkpoint["class_mapping"]
 
-confidence_threshold = checkpoint.get(
-    "confidence_threshold",
-    0.0
-)
-
 
 print("\nMODEL INFORMATION")
 
-print("Input size:", input_size)
-
-print("Number of features:", len(feature_names))
-
-print("Class mapping:", class_mapping)
+print(
+    "Input size:",
+    input_size
+)
 
 print(
-    "Confidence threshold:",
-    confidence_threshold
+    "Number of features:",
+    len(feature_names)
+)
+
+print(
+    "Class mapping:",
+    class_mapping
+)
+
+print(
+    "Minimum probability:",
+    f"{MIN_PROBABILITY * 100:.0f}%"
 )
 
 
@@ -166,11 +246,16 @@ model.load_state_dict(
 )
 
 
-model.to(DEVICE)
+model.to(
+    DEVICE
+)
 
 model.eval()
 
-print("\nModel loaded successfully.")
+
+print(
+    "\nModel loaded successfully."
+)
 
 
 # ==========================================
@@ -179,7 +264,9 @@ print("\nModel loaded successfully.")
 
 if not mt5.initialize():
 
-    print("MT5 initialization failed")
+    print(
+        "MT5 initialization failed"
+    )
 
     print(
         mt5.last_error()
@@ -188,7 +275,9 @@ if not mt5.initialize():
     raise SystemExit
 
 
-print("MT5 connected.")
+print(
+    "MT5 connected."
+)
 
 
 # ==========================================
@@ -198,6 +287,7 @@ print("MT5 connected.")
 symbol_info = mt5.symbol_info(
     SYMBOL
 )
+
 
 if symbol_info is None:
 
@@ -243,6 +333,7 @@ def get_completed_candles(count):
         1,
 
         count
+
     )
 
 
@@ -279,6 +370,7 @@ def get_completed_candles(count):
 
 
     # Chronological order
+
     df = df.sort_values(
 
         "time"
@@ -303,8 +395,11 @@ initial_df = get_completed_candles(
 
 
 if (
+
     initial_df is None
+
     or len(initial_df) < BUFFER_SIZE
+
 ):
 
     print(
@@ -316,7 +411,10 @@ if (
     raise SystemExit
 
 
-# Convert dataframe rows to buffer
+# ==========================================
+# CREATE BUFFER
+# ==========================================
+
 buffer = deque(
 
     initial_df.to_dict(
@@ -389,7 +487,7 @@ def predict():
 
 
     # --------------------------------------
-    # APPLY YOUR PIPELINE
+    # APPLY PIPELINE
     # --------------------------------------
 
     try:
@@ -423,8 +521,11 @@ def predict():
     # --------------------------------------
 
     if not isinstance(
+
         processed_df,
+
         pd.DataFrame
+
     ):
 
         print(
@@ -468,6 +569,7 @@ def predict():
 
     processed_df = processed_df.dropna()
 
+
     if processed_df.empty:
 
         print(
@@ -491,7 +593,9 @@ def predict():
     # --------------------------------------
 
     X = latest_row.to_numpy(
+
         dtype=np.float32
+
     )
 
 
@@ -511,7 +615,7 @@ def predict():
 
 
     # --------------------------------------
-    # CHECK INPUT SHAPE
+    # INPUT SHAPE CHECK
     # --------------------------------------
 
     if X.shape[1] != input_size:
@@ -535,9 +639,6 @@ def predict():
 
     # --------------------------------------
     # NUMPY -> TENSOR
-    #
-    # Shape:
-    # (1, 39)
     # --------------------------------------
 
     X_tensor = torch.tensor(
@@ -581,7 +682,7 @@ def predict():
 
 
     # --------------------------------------
-    # CONVERT TO PYTHON VALUES
+    # CONVERT TO PYTHON
     # --------------------------------------
 
     prediction = prediction.item()
@@ -590,29 +691,187 @@ def predict():
 
 
     # --------------------------------------
-    # CLASS -> SIGNAL
+    # GET ALL PROBABILITIES
     # --------------------------------------
 
-    signal = class_mapping[
-        prediction
-    ]
+    probability_array = (
+
+        probabilities[0]
+
+        .cpu()
+
+        .numpy()
+
+    )
 
 
-    # --------------------------------------
-    # CONFIDENCE FILTER
-    # --------------------------------------
+    hold_probability = float(
+        probability_array[0]
+    )
 
-    if confidence < confidence_threshold:
+    buy_probability = float(
+        probability_array[1]
+    )
 
-        print(
-            f"Confidence "
-            f"{confidence:.4f} "
-            f"is below threshold "
-            f"{confidence_threshold}"
-        )
+    sell_probability = float(
+        probability_array[2]
+    )
+
+
+    # ======================================
+    # PRINT ALL PROBABILITIES
+    # ======================================
+
+    print(
+        "\n-----------------------------"
+    )
+
+    print(
+        "MODEL PROBABILITIES"
+    )
+
+    print(
+        "-----------------------------"
+    )
+
+    print(
+        f"HOLD : {hold_probability * 100:.2f}%"
+    )
+
+    print(
+        f"BUY  : {buy_probability * 100:.2f}%"
+    )
+
+    print(
+        f"SELL : {sell_probability * 100:.2f}%"
+    )
+
+
+    # ======================================
+    # FIND HIGHEST PROBABILITY
+    # ======================================
+
+    max_probability = max(
+
+        hold_probability,
+
+        buy_probability,
+
+        sell_probability
+
+    )
+
+
+    # ======================================
+    # 70% FILTER
+    # ======================================
+
+    if max_probability > MIN_PROBABILITY:
+
+        # ----------------------------------
+        # BUY
+        # ----------------------------------
+
+        if buy_probability == max_probability:
+
+            signal = "BUY"
+
+            reason = (
+
+                f"BUY probability is "
+
+                f"{buy_probability * 100:.2f}% "
+
+                f"(> 70%)"
+
+            )
+
+
+        # ----------------------------------
+        # SELL
+        # ----------------------------------
+
+        elif sell_probability == max_probability:
+
+            signal = "SELL"
+
+            reason = (
+
+                f"SELL probability is "
+
+                f"{sell_probability * 100:.2f}% "
+
+                f"(> 70%)"
+
+            )
+
+
+        # ----------------------------------
+        # HOLD
+        # ----------------------------------
+
+        else:
+
+            signal = "HOLD"
+
+            reason = (
+
+                f"HOLD probability is "
+
+                f"{hold_probability * 100:.2f}% "
+
+                f"(> 70%)"
+
+            )
+
+
+    # ======================================
+    # NOTHING ABOVE 70%
+    # ======================================
+
+    else:
 
         signal = "HOLD"
 
+        reason = (
+
+            "No class probability is above 70%. "
+
+            f"Highest probability is "
+
+            f"{max_probability * 100:.2f}%"
+
+        )
+
+
+    # ======================================
+    # PRINT DECISION
+    # ======================================
+
+    print(
+        "\n========= SIGNAL DECISION ========="
+    )
+
+    print(
+        f"Signal: {signal}"
+    )
+
+    print(
+        f"Confidence: {confidence * 100:.2f}%"
+    )
+
+    print(
+        f"Reason: {reason}"
+    )
+
+    print(
+        "==================================="
+    )
+
+
+    # ======================================
+    # RETURN RESULT
+    # ======================================
 
     return {
 
@@ -622,9 +881,11 @@ def predict():
 
         "confidence": confidence,
 
-        "probabilities": probabilities.cpu().numpy(),
+        "probabilities": probability_array,
 
-        "features": latest_row
+        "features": latest_row,
+
+        "reason": reason
 
     }
 
@@ -635,18 +896,28 @@ def predict():
 
 def get_current_position():
 
-    positions = mt5.positions_get(symbol=SYMBOL)
+    positions = mt5.positions_get(
+        symbol=SYMBOL
+    )
+
 
     if not positions:
+
         return None
+
 
     position = positions[0]
 
+
     if position.type == mt5.POSITION_TYPE_BUY:
+
         return "BUY"
 
+
     elif position.type == mt5.POSITION_TYPE_SELL:
+
         return "SELL"
+
 
     return None
 
@@ -658,27 +929,46 @@ def get_current_position():
 def get_current_candle():
 
     rates = mt5.copy_rates_from_pos(
+
         SYMBOL,
+
         TIMEFRAME,
-        0,   # current forming candle
+
+        0,
+
         1
+
     )
 
+
     if rates is None or len(rates) == 0:
+
         return None
+
 
     candle = rates[0]
 
+
     return {
+
         "time": pd.to_datetime(
+
             candle["time"],
+
             unit="s"
+
         ),
+
         "open": candle["open"],
+
         "high": candle["high"],
+
         "low": candle["low"],
+
         "close": candle["close"],
+
         "tick_volume": candle["tick_volume"]
+
     }
 
 
@@ -691,39 +981,72 @@ def live_status():
     while True:
 
         candle = get_current_candle()
-        tick = mt5.symbol_info_tick(SYMBOL)
+
+        tick = mt5.symbol_info_tick(
+            SYMBOL
+        )
+
         position = get_current_position()
+
 
         if candle and tick:
 
             candle_start = candle["time"]
-            candle_end = candle_start + pd.Timedelta(
-                minutes=15
+
+            candle_end = (
+
+                candle_start
+
+                + pd.Timedelta(
+                    minutes=15
+                )
+
             )
 
+
             # --------------------------------------
-            # FIX: local PC time ke bajaye broker/
-            # server time use karo (tick.time),
-            # warna offset ki wajah se remaining
-            # hamesha negative -> 00:00 print hota
-            # tha.
+            # BROKER SERVER TIME
             # --------------------------------------
 
             now = pd.to_datetime(
+
                 tick.time,
+
                 unit="s"
+
             )
 
-            remaining = candle_end - now
+
+            remaining = (
+
+                candle_end - now
+
+            )
+
 
             remaining_seconds = max(
+
                 0,
-                int(remaining.total_seconds())
+
+                int(
+                    remaining.total_seconds()
+                )
+
             )
 
-            minutes = remaining_seconds // 60
-            seconds = remaining_seconds % 60
 
+            minutes = (
+                remaining_seconds // 60
+            )
+
+            seconds = (
+                remaining_seconds % 60
+            )
+
+
+            # --------------------------------------
+            # TRADE INFORMATION
+            # --------------------------------------
 
             if position:
 
@@ -731,32 +1054,63 @@ def live_status():
                     symbol=SYMBOL
                 )
 
-                profit = positions[0].profit
 
-                trade_info = (
-                    f"Trade: {position} | "
-                    f"P/L: ${profit:.2f}"
-                )
+                if positions:
+
+                    profit = positions[0].profit
+
+                    trade_info = (
+
+                        f"Trade: {position} | "
+
+                        f"P/L: ${profit:.2f}"
+
+                    )
+
+                else:
+
+                    trade_info = "No open trade"
+
 
             else:
 
                 trade_info = "No open trade"
 
 
+            # --------------------------------------
+            # LIVE DISPLAY
+            # --------------------------------------
+
             print(
+
                 f"\r"
-                f"Candle: {candle_start.strftime('%H:%M')} | "
+
+                f"Candle: "
+                f"{candle_start.strftime('%H:%M')} | "
+
                 f"O: {candle['open']:.2f} | "
+
                 f"H: {candle['high']:.2f} | "
+
                 f"L: {candle['low']:.2f} | "
+
                 f"C: {candle['close']:.2f} | "
+
                 f"Vol: {candle['tick_volume']} | "
-                f"Next prediction: {minutes:02}:{seconds:02} | "
+
+                f"Next prediction: "
+                f"{minutes:02}:{seconds:02} | "
+
                 f"{trade_info} | "
+
                 f"Commands: buy/sell/exit",
+
                 end="",
+
                 flush=True
+
             )
+
 
         time.sleep(1)
 
@@ -770,82 +1124,104 @@ def manual_trading():
     while True:
 
         command = input(
-            "\n\nCommand (buy / sell / exit): "
+
+            "\n\nCommand "
+            "(buy / sell / exit): "
+
         ).lower().strip()
+
 
         position = get_current_position()
 
 
-        # ----------------------------------
+        # ======================================
         # BUY
-        # ----------------------------------
+        # ======================================
 
         if command == "buy":
 
             if position is not None:
 
                 print(
+
                     f"Already in {position}. "
                     f"Exit first."
+
                 )
 
             else:
 
                 result = buy()
 
-                print("\nBUY RESULT:")
+                print(
+                    "\nBUY RESULT:"
+                )
+
                 print(result)
 
 
-        # ----------------------------------
+        # ======================================
         # SELL
-        # ----------------------------------
+        # ======================================
 
         elif command == "sell":
 
             if position is not None:
 
                 print(
+
                     f"Already in {position}. "
                     f"Exit first."
+
                 )
 
             else:
 
                 result = sell()
 
-                print("\nSELL RESULT:")
+                print(
+                    "\nSELL RESULT:"
+                )
+
                 print(result)
 
 
-        # ----------------------------------
+        # ======================================
         # EXIT
-        # ----------------------------------
+        # ======================================
 
         elif command == "exit":
 
             if position == "BUY":
 
-                print("\nClosing BUY...")
+                print(
+                    "\nClosing BUY..."
+                )
 
                 exit_buy_trade()
 
 
             elif position == "SELL":
 
-                print("\nClosing SELL...")
+                print(
+                    "\nClosing SELL..."
+                )
 
                 exit_sell_trade()
 
 
             else:
 
-                print("\nNo open trade.")
+                print(
+                    "\nNo open trade."
+                )
 
 
         else:
 
-            print("\nInvalid command.")
+            print(
+                "\nInvalid command."
+            )
 
 
 # ==========================================
@@ -853,8 +1229,11 @@ def manual_trading():
 # ==========================================
 
 threading.Thread(
+
     target=live_status,
+
     daemon=True
+
 ).start()
 
 
@@ -863,16 +1242,21 @@ threading.Thread(
 # ==========================================
 
 threading.Thread(
+
     target=manual_trading,
+
     daemon=True
+
 ).start()
 
 
 # ==========================================
-# LIVE PREDICTION LOOP
+# START LIVE PREDICTION
 # ==========================================
 
-print("\nLIVE PREDICTION STARTED\n")
+print(
+    "\nLIVE PREDICTION STARTED\n"
+)
 
 
 try:
@@ -881,42 +1265,59 @@ try:
 
         latest = get_completed_candles(1)
 
+
         if latest is not None and not latest.empty:
 
-            latest_row = latest.iloc[0].to_dict()
+            latest_row = (
+                latest.iloc[0].to_dict()
+            )
 
-            latest_time = latest_row["time"]
+            latest_time = (
+                latest_row["time"]
+            )
 
 
-            # ----------------------------------
-            # NEW COMPLETED CANDLE DETECTED
-            # ----------------------------------
+            # ==================================
+            # NEW COMPLETED CANDLE
+            # ==================================
 
             if latest_time != last_candle_time:
 
-                print("\n\n================================")
+                print(
+                    "\n\n================================"
+                )
 
-                print("NEW COMPLETED CANDLE")
+                print(
+                    "NEW COMPLETED CANDLE"
+                )
 
                 print(
                     "Time:",
                     latest_time
                 )
 
-                print("================================")
+                print(
+                    "================================"
+                )
 
 
-                # Add completed candle to buffer
+                # ----------------------------------
+                # ADD CANDLE TO BUFFER
+                # ----------------------------------
+
                 buffer.append(
                     latest_row
                 )
 
-                last_candle_time = latest_time
+
+                last_candle_time = (
+                    latest_time
+                )
 
 
-                # ----------------------------------
+                # ==================================
                 # PREDICTION
-                # ----------------------------------
+                # ==================================
 
                 result = predict()
 
@@ -927,40 +1328,163 @@ try:
                         "Prediction skipped."
                     )
 
+
                 else:
 
-                    signal = result["signal"]
+                    signal = (
+                        result["signal"]
+                    )
 
-                    confidence = result["confidence"]
+                    confidence = (
+                        result["confidence"]
+                    )
 
-                    probabilities = result["probabilities"]
+                    probabilities = (
+                        result["probabilities"]
+                    )
+
+                    reason = (
+                        result["reason"]
+                    )
 
 
                     print(
                         "\n========= PREDICTION ========="
                     )
 
-                    print(
-                        "Signal:",
-                        signal
-                    )
 
                     print(
-                        "Confidence:",
+                        f"Signal: {signal}"
+                    )
+
+
+                    print(
+                        f"Confidence: "
                         f"{confidence * 100:.2f}%"
                     )
 
+
                     print(
-                        "Probabilities:",
-                        probabilities
+                        f"HOLD: "
+                        f"{probabilities[0] * 100:.2f}%"
                     )
+
+
+                    print(
+                        f"BUY: "
+                        f"{probabilities[1] * 100:.2f}%"
+                    )
+
+
+                    print(
+                        f"SELL: "
+                        f"{probabilities[2] * 100:.2f}%"
+                    )
+
+
+                    print(
+                        f"Reason: {reason}"
+                    )
+
 
                     print(
                         "=============================="
                     )
 
 
-        time.sleep(CHECK_INTERVAL)
+                    # ==================================
+                    # OPTIONAL TRADE EXECUTION
+                    # ==================================
+
+                    if EXECUTE_TRADE:
+
+                        current_position = (
+                            get_current_position()
+                        )
+
+
+                        # ------------------------------
+                        # BUY SIGNAL
+                        # ------------------------------
+
+                        if signal == "BUY":
+
+                            if current_position is None:
+
+                                print(
+                                    "\nExecuting BUY..."
+                                )
+
+                                trade_result = buy()
+
+                                print(
+                                    trade_result
+                                )
+
+
+                            elif current_position == "SELL":
+
+                                print(
+                                    "\nSELL is open."
+                                    " Exit SELL first."
+                                )
+
+
+                            else:
+
+                                print(
+                                    "\nBUY already open."
+                                )
+
+
+                        # ------------------------------
+                        # SELL SIGNAL
+                        # ------------------------------
+
+                        elif signal == "SELL":
+
+                            if current_position is None:
+
+                                print(
+                                    "\nExecuting SELL..."
+                                )
+
+                                trade_result = sell()
+
+                                print(
+                                    trade_result
+                                )
+
+
+                            elif current_position == "BUY":
+
+                                print(
+                                    "\nBUY is open."
+                                    " Exit BUY first."
+                                )
+
+
+                            else:
+
+                                print(
+                                    "\nSELL already open."
+                                )
+
+
+                        # ------------------------------
+                        # HOLD
+                        # ------------------------------
+
+                        else:
+
+                            print(
+                                "\nHOLD -> No trade executed."
+                            )
+
+
+        time.sleep(
+            CHECK_INTERVAL
+        )
 
 
 # ==========================================
@@ -969,11 +1493,15 @@ try:
 
 except KeyboardInterrupt:
 
-    print("\nBot stopped manually.")
+    print(
+        "\nBot stopped manually."
+    )
 
 
 finally:
 
     mt5.shutdown()
 
-    print("MT5 disconnected.")
+    print(
+        "MT5 disconnected."
+    )

@@ -79,13 +79,8 @@ for i in range(
     len(X)
 ):
 
-    X_sequences.append(
-        X[i - sequence_length:i]
-    )
-
-    y_sequences.append(
-        y[i]
-    )
+    X_sequences.append(X[i - sequence_length:i])
+    y_sequences.append(y[i])
 
 
 X_sequences = np.array(

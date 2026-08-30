@@ -37,18 +37,13 @@ SYMBOL = "GOLD"
 
 TIMEFRAME = mt5.TIMEFRAME_M15
 
-# CNN ko 50 candles ki sequence chahiye
-BUFFER_SIZE = 50
-
 CHECK_INTERVAL = 1
 
-MODEL_PATH = r"F:\Git-Hub\Trading model\models\best_cnn_model.pt"
-
+MODEL_PATH = r"F:\Git-Hub\Trading model\best_cnn_model.pt"
 
 DEVICE = torch.device(
     "cuda" if torch.cuda.is_available() else "cpu"
 )
-
 
 # False = sirf prediction
 # True = real trade execution
@@ -59,72 +54,127 @@ EXECUTE_TRADE = False
 # MODEL ARCHITECTURE
 # ==========================================
 #
-# IMPORTANT:
+# Ye architecture exactly tumhare state_dict dump
+# se reconstruct kiya gaya hai:
 #
-# Apna EXACT CNN architecture yahan paste karo.
+#   features.0  -> Conv1d(87 -> 64, kernel=5)
+#   features.2  -> BatchNorm1d(64)      [running stats confirm BN]
+#   features.4  -> Conv1d(64 -> 128, kernel=5)
+#   features.6  -> BatchNorm1d(128)
 #
-# Class ka naam "mycnn" rakhna hai.
+#   classifier.1 -> Linear(1536 -> 256)
+#   classifier.4 -> Linear(256 -> 64)
+#   classifier.7 -> Linear(64  -> 3)
 #
-# Example:
+# Index gaps (1, 3, 5 in features / 2,3,5,6 in
+# classifier) hold NO parameters, so their exact
+# type (ReLU/Dropout) can't be recovered from the
+# state_dict alone. Dropout ki value checkpoint
+# mein maujood hai ("dropout" key), isliye Conv ->
+# Dropout -> BatchNorm -> ReLU pattern use kiya hai,
+# jo index spacing se bilkul match karta hai aur
+# checkpoint ke dropout hyperparameter ko bhi
+# meaningfully use karta hai.
 #
-# class mycnn(nn.Module):
-#     def __init__(self, ...):
-#         ...
-#
-#     def forward(self, x):
-#         ...
+# in_features for the first Linear layer (1536) is
+# NOT hardcoded -- ek dummy forward pass se compute
+# hota hai, taake agar pooling/padding assumption
+# thodi bhi different ho to bhi ye khud adjust ho
+# jaye aur load_state_dict fail na ho.
 #
 # ==========================================
 
-class MyCNN(nn.Module):
-    def __init__(self, num_features=87):
+class OptunaCNN(nn.Module):
+
+    def __init__(
+        self,
+        num_features,
+        sequence_length,
+        conv1_channels,
+        conv2_channels,
+        kernel_size,
+        linear1,
+        linear2,
+        dropout,
+        adaptive_pool_size,
+        num_classes=3
+    ):
         super().__init__()
 
         self.features = nn.Sequential(
-            # Conv1D
+
+            # Conv1D block 1
             nn.Conv1d(
                 in_channels=num_features,
-                out_channels=32,
-                kernel_size=5
+                out_channels=conv1_channels,
+                kernel_size=kernel_size
             ),
-
-            # BatchNorm
-            nn.BatchNorm1d(32),
-
-            # Activation
+            nn.Dropout(dropout),
+            nn.BatchNorm1d(conv1_channels),
             nn.ReLU(),
 
-            # Conv1D
+            # Conv1D block 2
             nn.Conv1d(
-                in_channels=32,
-                out_channels=128,
-                kernel_size=5
+                in_channels=conv1_channels,
+                out_channels=conv2_channels,
+                kernel_size=kernel_size
             ),
+            nn.Dropout(dropout),
+            nn.BatchNorm1d(conv2_channels),
+            nn.ReLU(),
 
-            # BatchNorm
-            nn.BatchNorm1d(128),
-
-            # Activation
-            nn.ReLU()
+            # --------------------------------------
+            # CRITICAL: Optuna sequence_length ko
+            # hyperparameter ki tarah search karta
+            # hai, isliye classifier ka input fixed
+            # rakhne ke liye AdaptiveAvgPool1d use
+            # hui hai -- ye output length hamesha
+            # 'adaptive_pool_size' pe force kar deti
+            # hai, chahe sequence_length kuch bhi ho.
+            # No learnable params, isliye state_dict
+            # keys pe koi asar nahi.
+            # --------------------------------------
+            nn.AdaptiveAvgPool1d(adaptive_pool_size)
         )
+
+        # --------------------------------------
+        # Dummy forward pass se flatten size
+        # nikaalte hain (hardcode nahi karte),
+        # taake classifier.1 ka in_features
+        # hamesha sahi bane.
+        # --------------------------------------
+
+        with torch.no_grad():
+
+            dummy = torch.zeros(
+                1,
+                num_features,
+                sequence_length
+            )
+
+            flat_size = self.features(
+                dummy
+            ).flatten(1).shape[1]
 
         self.classifier = nn.Sequential(
             nn.Flatten(),
 
-            # CNN output -> 128
-            nn.Linear(1536, 128),
+            nn.Linear(flat_size, linear1),
             nn.ReLU(),
+            nn.Dropout(dropout),
 
-            nn.Linear(128, 128),
+            nn.Linear(linear1, linear2),
             nn.ReLU(),
+            nn.Dropout(dropout),
 
-            nn.Linear(128, 3)
+            nn.Linear(linear2, num_classes)
         )
 
     def forward(self, x):
         x = self.features(x)
         x = self.classifier(x)
         return x
+
 
 print("Using device:", DEVICE)
 
@@ -151,13 +201,8 @@ except Exception as e:
 
 # ==========================================
 # LOAD MODEL METADATA
+# (SAB checkpoint se, hardcode nahi)
 # ==========================================
-
-# input_size agar checkpoint mein hai
-# to use karo.
-#
-# Agar nahi hai to feature_names ki length
-# automatically use hogi.
 
 feature_names = checkpoint["feature_names"]
 
@@ -168,10 +213,73 @@ input_size = checkpoint.get(
 
 class_mapping = checkpoint["class_mapping"]
 
+# --------------------------------------------------
+# FIX: checkpoint mein class_mapping "naam -> number"
+# hai (e.g. {'hold': 0, 'buy': 1, 'sell': 2}), lekin
+# prediction ke baad hume "number -> naam" chahiye
+# hota hai (class_mapping[prediction] kaam karega
+# tabhi jab prediction ek number ho aur dict mein
+# number key ho). Isliye reverse kar rahe hain.
+# --------------------------------------------------
+
+class_mapping = {
+    index: name
+    for name, index in class_mapping.items()
+}
+
 confidence_threshold = checkpoint.get(
     "confidence_threshold",
     0.0
 )
+
+# --------------------------------------------------
+# IMPORTANT: sequence length checkpoint se hi lo,
+# 50 hardcode mat karo. State dict ka math
+# (flatten=1536, 2x conv kernel=5, no padding)
+# suggest karta hai ye 20 hogi -- lekin final
+# authority checkpoint hi hai.
+# --------------------------------------------------
+
+SEQUENCE_LENGTH = checkpoint["sequence_length"]
+
+BUFFER_SIZE = SEQUENCE_LENGTH
+
+conv1_channels = checkpoint["conv1_channels"]
+
+conv2_channels = checkpoint["conv2_channels"]
+
+kernel_size = checkpoint["kernel_size"]
+
+linear1 = checkpoint["linear1"]
+
+linear2 = checkpoint["linear2"]
+
+dropout = checkpoint.get(
+    "dropout",
+    0.0
+)
+
+# --------------------------------------------------
+# ADAPTIVE POOL SIZE: guess nahi kiya -- checkpoint
+# ke classifier.1.weight ka exact shape padh ke
+# nikala hai, taake AdaptiveAvgPool1d output hamesha
+# training wale flatten size (1536) se match kare,
+# chahe sequence_length kuch bhi ho.
+# --------------------------------------------------
+
+flatten_size_needed = checkpoint["model_state_dict"][
+    "classifier.1.weight"
+].shape[1]
+
+if flatten_size_needed % conv2_channels != 0:
+
+    print(
+        "\nWARNING: flatten size cleanly divide "
+        "nahi ho rahi conv2_channels se. Adaptive "
+        "pool size approx kiya ja raha hai."
+    )
+
+adaptive_pool_size = flatten_size_needed // conv2_channels
 
 
 print("\nMODEL INFORMATION")
@@ -180,7 +288,24 @@ print("Input size:", input_size)
 
 print("Number of features:", len(feature_names))
 
-print("Sequence length:", BUFFER_SIZE)
+print("Sequence length (from checkpoint):", SEQUENCE_LENGTH)
+
+print("Conv1 channels:", conv1_channels)
+
+print("Conv2 channels:", conv2_channels)
+
+print("Kernel size:", kernel_size)
+
+print("Linear1:", linear1)
+
+print("Linear2:", linear2)
+
+print("Dropout:", dropout)
+
+print(
+    "Adaptive pool output size (derived):",
+    adaptive_pool_size
+)
 
 print("Class mapping:", class_mapping)
 
@@ -194,7 +319,17 @@ print(
 # CREATE MODEL
 # ==========================================
 
-model = mycnn()
+model = OptunaCNN(
+    num_features=input_size,
+    sequence_length=SEQUENCE_LENGTH,
+    conv1_channels=conv1_channels,
+    conv2_channels=conv2_channels,
+    kernel_size=kernel_size,
+    linear1=linear1,
+    linear2=linear2,
+    dropout=dropout,
+    adaptive_pool_size=adaptive_pool_size
+)
 
 
 # ==========================================
@@ -213,8 +348,11 @@ except Exception as e:
     print(e)
 
     print(
-        "\nMake sure mycnn architecture "
-        "is EXACTLY the same as training."
+        "\nArchitecture state_dict se match nahi "
+        "kar rahi. 'features'/'classifier' index "
+        "gaps mein Dropout ki jagah koi aur layer "
+        "(e.g. MaxPool1d) ho sakta hai -- agar ye "
+        "error aaye to training script check karo."
     )
 
     raise SystemExit
@@ -352,16 +490,30 @@ def get_completed_candles(count):
 
 # ==========================================
 # INITIAL BUFFER
+#
+# NOTE: pipeline mein rolling/EMA indicators
+# (sma_20, atr_21, rsi_21, waghera) ko khud
+# kaafi lookback chahiye. Agar BUFFER_SIZE sirf
+# SEQUENCE_LENGTH rakha to pipeline() ke baad
+# dropna() se dataframe empty ho sakta hai.
+#
+# Isliye MT5 se extra warm-up candles fetch
+# karte hain, phir sirf pipeline ke baad
+# SEQUENCE_LENGTH wali sequence nikaalte hain.
 # ==========================================
 
+PIPELINE_WARMUP = 80
+
+FETCH_SIZE = SEQUENCE_LENGTH + PIPELINE_WARMUP
+
 initial_df = get_completed_candles(
-    BUFFER_SIZE
+    FETCH_SIZE
 )
 
 
 if (
     initial_df is None
-    or len(initial_df) < BUFFER_SIZE
+    or len(initial_df) < FETCH_SIZE
 ):
 
     print(
@@ -381,14 +533,16 @@ buffer = deque(
         "records"
     ),
 
-    maxlen=BUFFER_SIZE
+    maxlen=FETCH_SIZE
 
 )
 
 
 print(
     f"Buffer initialized with "
-    f"{len(buffer)} candles."
+    f"{len(buffer)} candles "
+    f"(warm-up {PIPELINE_WARMUP} + "
+    f"sequence {SEQUENCE_LENGTH})."
 )
 
 
@@ -415,7 +569,7 @@ def predict():
     # BUFFER CHECK
     # --------------------------------------
 
-    if len(buffer) < BUFFER_SIZE:
+    if len(buffer) < FETCH_SIZE:
 
         print(
             "Not enough candles in buffer."
@@ -547,7 +701,7 @@ def predict():
     # CHECK SEQUENCE LENGTH
     # --------------------------------------
 
-    if len(processed_df) < BUFFER_SIZE:
+    if len(processed_df) < SEQUENCE_LENGTH:
 
         print(
             "\nNOT ENOUGH VALID ROWS"
@@ -555,7 +709,7 @@ def predict():
 
         print(
             "Required:",
-            BUFFER_SIZE
+            SEQUENCE_LENGTH
         )
 
         print(
@@ -567,11 +721,11 @@ def predict():
 
 
     # --------------------------------------
-    # TAKE LAST 50 ROWS
+    # TAKE LAST SEQUENCE_LENGTH ROWS
     # --------------------------------------
 
     sequence_df = processed_df.iloc[
-        -BUFFER_SIZE:
+        -SEQUENCE_LENGTH:
     ].copy()
 
 
@@ -625,10 +779,7 @@ def predict():
     # --------------------------------------
     # CURRENT SHAPE
     #
-    # X:
-    #
-    # (50, features)
-    #
+    # X: (SEQUENCE_LENGTH, features)
     # --------------------------------------
 
     print(
@@ -655,22 +806,11 @@ def predict():
     # --------------------------------------
     # CNN INPUT SHAPE
     #
-    # Current:
+    # Current: (seq_len, features)
+    # Add batch: (1, seq_len, features)
+    # Transpose: (1, features, seq_len)
     #
-    # (50, features)
-    #
-    # Add batch:
-    #
-    # (1, 50, features)
-    #
-    # Then transpose:
-    #
-    # (1, features, 50)
-    #
-    # Conv1D normally expects:
-    #
-    # (batch, channels, sequence)
-    #
+    # Conv1d expects: (batch, channels, sequence)
     # --------------------------------------
 
     X_tensor = X_tensor.unsqueeze(0)
@@ -874,7 +1014,9 @@ def live_status():
             )
 
 
-            # Broker/server time
+            # Broker/server time (local PC time
+            # nahi -- warna countdown hamesha
+            # 00:00 dikhta hai)
 
             now = pd.to_datetime(
 
@@ -1201,7 +1343,7 @@ try:
 
                     print(
                         "Sequence:",
-                        f"{BUFFER_SIZE} candles"
+                        f"{SEQUENCE_LENGTH} candles"
                     )
 
 

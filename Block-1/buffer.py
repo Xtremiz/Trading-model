@@ -40,7 +40,7 @@ BUFFER_SIZE = 30
 # Kitni frequently new candle check karni hai
 CHECK_INTERVAL = 1
 
-MODEL_PATH = "best_gold_model.pt"
+MODEL_PATH = r"F:\Git-Hub\Trading model\models\best_gold_model.pt"
 
 DEVICE = torch.device(
     "cuda" if torch.cuda.is_available() else "cpu"
@@ -686,19 +686,19 @@ def live_status():
             candle_end = candle_start + pd.Timedelta(
                 minutes=15
             )
-
-            now = pd.Timestamp.now()
-
+            now = pd.to_datetime(
+            
+                            tick.time,
+            
+                            unit="s"
+            
+                        )
             remaining = candle_end - now
-
-            remaining_seconds = max(
-                0,
-                int(remaining.total_seconds())
-            )
-
+            remaining_seconds = max(0,int(
+                               remaining.total_seconds()))
+           
             minutes = remaining_seconds // 60
             seconds = remaining_seconds % 60
-
 
             if position:
 

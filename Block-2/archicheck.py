@@ -1,7 +1,7 @@
 import torch
 import torch.nn as nn
 
-MODEL_PATH = r"F:\Git-Hub\Trading model\models\best_gold_ann_model.pt"
+MODEL_PATH = r"F:\Git-Hub\Trading model\best_cnn_model.pt"
 
 
 print("=" * 70)
