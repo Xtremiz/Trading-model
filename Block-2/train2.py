@@ -1,3 +1,4 @@
+import copy
 import torch
 import torch.nn as nn
 from torch.utils.data import DataLoader, Dataset
@@ -7,7 +8,9 @@ import numpy as np
 from sklearn.metrics import (
     classification_report,
     accuracy_score,
-    balanced_accuracy_score
+    balanced_accuracy_score,
+    f1_score,
+    confusion_matrix
 )
 
 
@@ -15,13 +18,11 @@ from sklearn.metrics import (
 # 1. HYPERPARAMETERS
 # =========================================================
 
-learning_rate = 0.00684998
-batch_size = 64
-epochs = 100
+LEARNING_RATE = 0.00684998
+BATCH_SIZE = 64
+EPOCHS = 100
+PATIENCE = 40   # early stopping patience
 
-hold_weight = 0.8
-buy_weight = 2.0
-sell_weight = 2.9
 
 conv1_channels = 64
 conv2_channels = 128
@@ -32,7 +33,15 @@ dropout = 0.2
 linear1 = 64
 linear2 = 128
 
-sequence_length = 50
+sequence_length = 100
+
+
+# =========================================================
+# DEVICE
+# =========================================================
+
+device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+print(f"Using device: {device}")
 
 
 # =========================================================
@@ -40,7 +49,7 @@ sequence_length = 50
 # =========================================================
 
 df = pd.read_csv(
-    r"F:\Git-Hub\Trading model\Block-2\goldthresold0.4_norm.csv"
+    r"F:\Git-Hub\Trading model\block-2, new idea\gold_target_40_30_30.csv"
 )
 
 df = df.dropna()
@@ -50,10 +59,11 @@ df = df.dropna()
 # 3. SIGNAL MAPPING
 # =========================================================
 
+df.rename(columns={"target": "signal"}, inplace=True)
 signal_mapping = {
-    "hold": 0,
-    "buy": 1,
-    "sell": 2
+    0: 0,
+    1: 1,
+    -1: 2
 }
 
 df["signal"] = df["signal"].map(signal_mapping)
@@ -100,10 +110,11 @@ print("y Shape:", y_sequences.shape)
 
 
 # =========================================================
-# 6. TRAIN TEST SPLIT
+# 6. TRAIN / VAL / TEST SPLIT
+# First split off test, then split remainder into train/val
 # =========================================================
 
-X_train, X_test, y_train, y_test = train_test_split(
+X_train_full, X_test, y_train_full, y_test = train_test_split(
     X_sequences,
     y_sequences,
     test_size=0.2,
@@ -111,8 +122,17 @@ X_train, X_test, y_train, y_test = train_test_split(
     shuffle=True
 )
 
+X_train, X_val, y_train, y_val = train_test_split(
+    X_train_full,
+    y_train_full,
+    test_size=0.1,   # 10% of remaining data used for validation
+    random_state=42,
+    shuffle=True
+)
+
 
 print("\nTrain Shape:", X_train.shape)
+print("Val Shape  :", X_val.shape)
 print("Test Shape :", X_test.shape)
 
 
@@ -120,30 +140,18 @@ print("Test Shape :", X_test.shape)
 # 7. CLASS WEIGHTS
 # =========================================================
 
-# Class mapping:
-# 0 = HOLD
-# 1 = BUY
-# 2 = SELL
+hold_weight = 0.9
+buy_weight =  1.23
+sell_weight = 1.23
 
-class_weights = {
-    0: hold_weight,
-    1: buy_weight,
-    2: sell_weight
-}
-
-print("\nClass Weights:")
-print(class_weights)
-
-
-# PyTorch Tensor
-class_weights_tensor = torch.tensor(
+CLASS_WEIGHTS = torch.tensor(
     [
         hold_weight,
         buy_weight,
         sell_weight
     ],
     dtype=torch.float32
-)
+).to(device)
 
 
 # =========================================================
@@ -180,15 +188,9 @@ class CustomDataset(Dataset):
 # 9. DATASETS
 # =========================================================
 
-train_data = CustomDataset(
-    X_train,
-    y_train
-)
-
-test_data = CustomDataset(
-    X_test,
-    y_test
-)
+train_data = CustomDataset(X_train, y_train)
+val_data = CustomDataset(X_val, y_val)
+test_data = CustomDataset(X_test, y_test)
 
 
 # =========================================================
@@ -197,13 +199,19 @@ test_data = CustomDataset(
 
 train_loader = DataLoader(
     train_data,
-    batch_size=batch_size,
+    batch_size=BATCH_SIZE,
     shuffle=True
+)
+
+val_loader = DataLoader(
+    val_data,
+    batch_size=BATCH_SIZE,
+    shuffle=False
 )
 
 test_loader = DataLoader(
     test_data,
-    batch_size=batch_size,
+    batch_size=BATCH_SIZE,
     shuffle=False
 )
 
@@ -217,7 +225,6 @@ class MyCNN(nn.Module):
     def __init__(self, num_features):
 
         super().__init__()
-
 
         # -------------------------------------------------
         # CNN FEATURE EXTRACTOR
@@ -237,18 +244,11 @@ class MyCNN(nn.Module):
 
             nn.ReLU(),
 
-            nn.BatchNorm1d(
-                conv1_channels
-            ),
+            nn.BatchNorm1d(conv1_channels),
 
-            nn.MaxPool1d(
-                kernel_size=2,
-                stride=2
-            ),
+            nn.MaxPool1d(kernel_size=2, stride=2),
 
-            # Sequence:
-            # 50 -> 25
-
+            # Sequence: 50 -> 25
 
             nn.Conv1d(
                 in_channels=conv1_channels,
@@ -259,88 +259,51 @@ class MyCNN(nn.Module):
 
             nn.ReLU(),
 
-            nn.BatchNorm1d(
-                conv2_channels
-            ),
+            nn.BatchNorm1d(conv2_channels),
 
-            nn.MaxPool1d(
-                kernel_size=2,
-                stride=2
-            )
+            nn.MaxPool1d(kernel_size=2, stride=2)
 
-            # Sequence:
-            # 25 -> 12
+            # Sequence: 25 -> 12
         )
-
 
         # -------------------------------------------------
         # CLASSIFIER
         # -------------------------------------------------
 
-        # Final shape:
-        #
-        # batch
-        # 128 channels
-        # 12 sequence length
-        #
+        # Final shape: batch, 128 channels, 12 seq len
         # Flatten = 128 * 12 = 1536
 
         self.classifier = nn.Sequential(
 
             nn.Flatten(),
 
-            nn.Linear(
-                conv2_channels * 12,
-                linear1
-            ),
+            nn.Linear(conv2_channels * 25, linear1),
 
             nn.ReLU(),
 
-            nn.Dropout(
-                dropout
-            ),
+            nn.Dropout(dropout),
 
-
-            nn.Linear(
-                linear1,
-                linear2
-            ),
+            nn.Linear(linear1, linear2),
 
             nn.ReLU(),
 
-            nn.Dropout(
-                dropout
-            ),
-
+            nn.Dropout(dropout),
 
             # Output:
             # HOLD = 0
             # BUY  = 1
             # SELL = 2
 
-            nn.Linear(
-                linear2,
-                3
-            )
+            nn.Linear(linear2, 3)
         )
-
 
     def forward(self, x):
 
-        # Original:
-        # (batch, 50, num_features)
-
-        x = x.permute(
-            0,
-            2,
-            1
-        )
-
-        # After:
-        # (batch, num_features, 50)
+        # Original: (batch, 50, num_features)
+        x = x.permute(0, 2, 1)
+        # After: (batch, num_features, 50)
 
         x = self.features(x)
-
         x = self.classifier(x)
 
         return x
@@ -352,242 +315,273 @@ class MyCNN(nn.Module):
 
 num_features = X_train.shape[2]
 
-model = MyCNN(
-    num_features=num_features
-)
-
+model = MyCNN(num_features=num_features).to(device)
 
 print("\nModel:")
 print(model)
 
 
 # =========================================================
-# 13. LOSS FUNCTION
+# 13. LOSS, OPTIMIZER, SCHEDULER
 # =========================================================
 
-criterion = nn.CrossEntropyLoss(
-    weight=class_weights_tensor
-)
-
-
-# =========================================================
-# 14. OPTIMIZER
-# =========================================================
+criterion = nn.CrossEntropyLoss(weight=CLASS_WEIGHTS)
 
 optimizer = torch.optim.AdamW(
     model.parameters(),
-    lr=learning_rate
+    lr=LEARNING_RATE,
+    weight_decay=1e-4
+)
+
+scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(
+    optimizer,
+    mode="max",
+    factor=0.5,
+    patience=5
 )
 
 
 # =========================================================
-# 15. TRAIN MODEL
+# 14. EVALUATION FUNCTION
+# =========================================================
+
+def evaluate_model(model, loader):
+
+    model.eval()
+
+    all_labels = []
+    all_predictions = []
+
+    with torch.no_grad():
+
+        for batch_features, batch_labels in loader:
+
+            batch_features = batch_features.to(device)
+            batch_labels = batch_labels.to(device)
+
+            outputs = model(batch_features)
+
+            predictions = torch.argmax(outputs, dim=1)
+
+            all_labels.extend(batch_labels.cpu().numpy())
+            all_predictions.extend(predictions.cpu().numpy())
+
+    all_labels = np.array(all_labels)
+    all_predictions = np.array(all_predictions)
+
+    accuracy = accuracy_score(all_labels, all_predictions)
+
+    balanced_acc = balanced_accuracy_score(all_labels, all_predictions)
+
+    macro_f1 = f1_score(
+        all_labels, all_predictions, average="macro", zero_division=0
+    )
+
+    weighted_f1 = f1_score(
+        all_labels, all_predictions, average="weighted", zero_division=0
+    )
+
+    report = classification_report(
+        all_labels,
+        all_predictions,
+        target_names=["HOLD", "BUY", "SELL"],
+        output_dict=True,
+        zero_division=0
+    )
+
+    hold_f1 = report["HOLD"]["f1-score"]
+    buy_f1 = report["BUY"]["f1-score"]
+    sell_f1 = report["SELL"]["f1-score"]
+
+    return (
+        accuracy,
+        balanced_acc,
+        macro_f1,
+        weighted_f1,
+        hold_f1,
+        buy_f1,
+        sell_f1,
+        all_labels,
+        all_predictions
+    )
+
+
+# =========================================================
+# 15. TRAINING LOOP (with validation + early stopping)
 # =========================================================
 
 print("\nStarting Training...\n")
 
+best_macro_f1 = -1.0
+best_balanced_acc = -1.0
 
-for epoch in range(epochs):
+best_model_weights = None
+best_epoch = 0
+
+epochs_without_improvement = 0
+
+
+for epoch in range(EPOCHS):
 
     model.train()
 
-    total_loss = 0.0
+    total_loss = 0
 
     for batch_features, batch_labels in train_loader:
 
-        # ---------------------------------------------
-        # Forward Pass
-        # ---------------------------------------------
-
-        outputs = model(
-            batch_features
-        )
-
-
-        # ---------------------------------------------
-        # Weighted Loss
-        # ---------------------------------------------
-
-        loss = criterion(
-            outputs,
-            batch_labels
-        )
-
-
-        # ---------------------------------------------
-        # Reset Gradients
-        # ---------------------------------------------
+        batch_features = batch_features.to(device)
+        batch_labels = batch_labels.to(device)
 
         optimizer.zero_grad()
 
+        output = model(batch_features)
 
-        # ---------------------------------------------
-        # Backpropagation
-        # ---------------------------------------------
+        loss = criterion(output, batch_labels)
 
         loss.backward()
 
-
-        # ---------------------------------------------
-        # Update Weights
-        # ---------------------------------------------
+        torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)
 
         optimizer.step()
 
-
         total_loss += loss.item()
 
+    average_loss = total_loss / len(train_loader)
 
-    average_loss = (
-        total_loss /
-        len(train_loader)
-    )
+    (
+        val_accuracy,
+        val_balanced_acc,
+        val_macro_f1,
+        val_weighted_f1,
+        val_hold_f1,
+        val_buy_f1,
+        val_sell_f1,
+        _,
+        _
+    ) = evaluate_model(model, val_loader)
 
+    scheduler.step(val_macro_f1)
+
+    current_lr = optimizer.param_groups[0]["lr"]
 
     print(
-        f"Epoch [{epoch + 1}/{epochs}] "
-        f"Loss: {average_loss:.4f}"
+        f"Epoch [{epoch + 1}/{EPOCHS}] "
+        f"Loss: {average_loss:.4f} | "
+        f"Macro F1: {val_macro_f1:.4f} | "
+        f"Balanced Acc: {val_balanced_acc * 100:.2f}% | "
+        f"HOLD F1: {val_hold_f1:.4f} | "
+        f"BUY F1: {val_buy_f1:.4f} | "
+        f"SELL F1: {val_sell_f1:.4f} | "
+        f"LR: {current_lr:.8f}"
     )
 
+    is_better = False
 
-# =========================================================
-# 16. TESTING
-# =========================================================
+    if val_macro_f1 > best_macro_f1:
+        is_better = True
+    elif (
+        val_macro_f1 == best_macro_f1
+        and val_balanced_acc > best_balanced_acc
+    ):
+        is_better = True
 
-model.eval()
+    if is_better:
 
-total = 0
-correct = 0
+        best_macro_f1 = val_macro_f1
+        best_balanced_acc = val_balanced_acc
 
+        best_model_weights = copy.deepcopy(model.state_dict())
 
-with torch.no_grad():
+        best_epoch = epoch + 1
 
-    for batch_features, batch_labels in test_loader:
+        epochs_without_improvement = 0
 
-        outputs = model(
-            batch_features
-        )
+        print(f"  --> New best model! Macro F1: {best_macro_f1:.4f}")
 
-        _, predicted = torch.max(
-            outputs,
-            1
-        )
+    else:
 
-        total += batch_labels.size(0)
+        epochs_without_improvement += 1
 
-        correct += (
-            predicted == batch_labels
-        ).sum().item()
+    if epochs_without_improvement >= PATIENCE:
 
+        print("\nEarly stopping triggered.")
 
-accuracy = (
-    correct /
-    total
-) * 100
-
-
-print(
-    f"\nTest Accuracy: {accuracy:.2f}%"
-)
+        break
 
 
 # =========================================================
-# 17. COLLECT PREDICTIONS
+# 16. SAVE + LOAD BEST MODEL
 # =========================================================
 
-model.eval()
+if best_model_weights is not None:
 
-all_labels = []
-all_predictions = []
+    torch.save(best_model_weights, "best_gold_model_conv1d.pt")
 
+    print(
+        f"\nBest model saved (Epoch {best_epoch}) "
+        f"with Macro F1: {best_macro_f1:.4f}"
+    )
 
-with torch.no_grad():
+    model.load_state_dict(best_model_weights)
 
-    for batch_features, batch_labels in test_loader:
+else:
 
-        outputs = model(
-            batch_features
-        )
-
-        _, predicted = torch.max(
-            outputs,
-            1
-        )
-
-
-        all_labels.extend(
-            batch_labels.cpu().numpy()
-        )
-
-        all_predictions.extend(
-            predicted.cpu().numpy()
-        )
+    print("\nWarning: No best model found.")
 
 
 # =========================================================
-# 18. RAW ACCURACY
+# 17. FINAL TEST EVALUATION
 # =========================================================
 
-raw_accuracy = accuracy_score(
-    all_labels,
-    all_predictions
-)
+(
+    test_accuracy,
+    test_balanced_acc,
+    test_macro_f1,
+    test_weighted_f1,
+    test_hold_f1,
+    test_buy_f1,
+    test_sell_f1,
+    test_labels,
+    test_predictions
+) = evaluate_model(model, test_loader)
 
 
-print(
-    f"Raw Accuracy: "
-    f"{raw_accuracy * 100:.2f}%"
-)
+print("\n" + "=" * 50)
+print("FINAL TEST RESULTS (Best Model)")
+print("=" * 50)
 
+print(f"Test Accuracy: {test_accuracy * 100:.2f}%")
+print(f"Test Balanced Accuracy: {test_balanced_acc * 100:.2f}%")
+print(f"Test Macro F1: {test_macro_f1:.4f}")
+print(f"Test Weighted F1: {test_weighted_f1:.4f}")
+print(f"HOLD F1: {test_hold_f1:.4f}")
+print(f"BUY F1: {test_buy_f1:.4f}")
+print(f"SELL F1: {test_sell_f1:.4f}")
 
-# =========================================================
-# 19. BALANCED ACCURACY
-# =========================================================
-
-balanced_accuracy = balanced_accuracy_score(
-    all_labels,
-    all_predictions
-)
-
-
-print(
-    f"Balanced Accuracy: "
-    f"{balanced_accuracy * 100:.2f}%"
-)
-
-
-# =========================================================
-# 20. CLASSIFICATION REPORT
-# =========================================================
-
-print(
-    "\nClassification Report:\n"
-)
-
+print("\nClassification Report:\n")
 
 print(
     classification_report(
-        all_labels,
-        all_predictions,
-        target_names=[
-            "HOLD",
-            "BUY",
-            "SELL"
-        ],
-        digits=4
+        test_labels,
+        test_predictions,
+        target_names=["HOLD", "BUY", "SELL"],
+        digits=4,
+        zero_division=0
     )
 )
 
+cm = confusion_matrix(test_labels, test_predictions)
 
-# =========================================================
-# 21. SAVE MODEL
-# =========================================================
-
-torch.save(
-    model.state_dict(),
-    "best_gold_model.pt"
-)
+print("\nConfusion Matrix:")
+print("              Predicted")
+print("              HOLD   BUY   SELL")
 
 print(
-    "\nModel saved as: best_gold_model.pt"
+    f"Actual HOLD   {cm[0][0]:5d} {cm[0][1]:5d} {cm[0][2]:5d}"
+)
+print(
+    f"Actual BUY    {cm[1][0]:5d} {cm[1][1]:5d} {cm[1][2]:5d}"
+)
+print(
+    f"Actual SELL   {cm[2][0]:5d} {cm[2][1]:5d} {cm[2][2]:5d}"
 )
