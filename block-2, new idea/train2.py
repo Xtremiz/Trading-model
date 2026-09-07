@@ -1,10 +1,10 @@
 import copy
-import numpy as np
-import pandas as pd
 import torch
 import torch.nn as nn
-
 from torch.utils.data import DataLoader, Dataset
+from sklearn.model_selection import train_test_split
+import pandas as pd
+import numpy as np
 from sklearn.metrics import (
     classification_report,
     accuracy_score,
@@ -14,243 +14,304 @@ from sklearn.metrics import (
 )
 
 
-# ============================================================
-# 1. DEVICE
-# ============================================================
+# =========================================================
+# 1. HYPERPARAMETERS
+# =========================================================
+
+LEARNING_RATE = 0.00684998
+BATCH_SIZE = 64
+EPOCHS = 100
+PATIENCE = 50   # early stopping patience
+
+
+conv1_channels = 64
+conv2_channels = 128
+kernel_size = 3
+
+dropout = 0.2
+
+linear1 = 64
+linear2 = 128
+
+sequence_length = 100
+
+
+# =========================================================
+# DEVICE
+# =========================================================
 
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-
-print("=" * 60)
 print(f"Using device: {device}")
-print("=" * 60)
 
 
-# ============================================================
-# 2. SETTINGS
-# ============================================================
+# =========================================================
+# 2. LOAD DATA
+# =========================================================
 
-DATA_PATH = r"F:\Git-Hub\Trading model\block-2, new idea\goldbuydata.csv"
+df = pd.read_csv(
+    r"F:\Git-Hub\Trading model\block-2, new idea\gold_target_40_30_30.csv"
+)
 
-MODEL_PATH = r"F:\Git-Hub\Trading model\block-2, new idea\best_gold_buy_model.pt"
-
-SEQUENCE_LENGTH = 50
-
-BATCH_SIZE = 32
-
-EPOCHS = 100
-
-LEARNING_RATE = 0.001
-
-PATIENCE = 12
-
-# ------------------------------------------------------------
-# BUY CLASS WEIGHT
-#
-# Class mapping:
-# 0 = HOLD
-# 1 = BUY
-#
-# BUY ko priority di ja rahi hai.
-# Pehle 4.0 try karna reasonable hai.
-# Agar BUY recall kam ho -> 5.0 try karo.
-# Agar false BUY bohot zyada hon -> 3.0 try karo.
-# ------------------------------------------------------------
-
-HOLD_WEIGHT = 0.5
-BUY_WEIGHT = 3.4
-
-CLASS_WEIGHTS = torch.tensor(
-    [HOLD_WEIGHT, BUY_WEIGHT],
-    dtype=torch.float32
-).to(device)
+df = df.dropna()
 
 
-# ============================================================
-# 3. LOAD DATA
-# ============================================================
+# =========================================================
+# 3. SIGNAL MAPPING
+# =========================================================
 
-print("\nLoading dataset...")
-
-df = pd.read_csv(DATA_PATH)
-
-df = df.dropna().reset_index(drop=True)
-
-print(f"Dataset shape: {df.shape}")
-
-
-# ============================================================
-# 4. SIGNAL MAPPING
-# ============================================================
-
+df.rename(columns={"target": "signal"}, inplace=True)
 signal_mapping = {
-    "hold": 0,
-    "buy": 1
+    0: 0,
+    1: 1,
+    -1: 2
 }
 
 df["signal"] = df["signal"].map(signal_mapping)
 
-if df["signal"].isna().any():
-    print("\nERROR: Unknown signal values found:")
-    print(df.loc[df["signal"].isna(), "signal"])
-    raise ValueError(
-        "Signal column contains values other than 'hold' and 'buy'."
-    )
+# Remove any rows where signal mapping failed
+df = df.dropna(subset=["signal"])
 
 df["signal"] = df["signal"].astype(int)
 
-print("\nOriginal class distribution:")
-print(df["signal"].value_counts().sort_index())
 
-print("\nClass distribution:")
-print(
-    df["signal"]
-    .value_counts()
-    .rename(index={0: "HOLD", 1: "BUY"})
-)
+# =========================================================
+# 4. FEATURES AND LABELS
+# =========================================================
+
+X = df.drop(columns=["signal"]).values
+y = df["signal"].values
 
 
-# ============================================================
-# 5. FEATURES
-# ============================================================
-
-feature_names = [col for col in df.columns if col != "signal"]
-
-X = df[feature_names].values.astype(np.float32)
-y = df["signal"].values.astype(np.int64)
-
-print("\nNumber of features:", len(feature_names))
-
-
-# ============================================================
-# 6. CREATE SEQUENCES
-# ============================================================
-
-print("\nCreating sequences...")
+# =========================================================
+# 5. CREATE SEQUENCES
+# Previous 50 candles -> predict current signal
+# =========================================================
 
 X_sequences = []
 y_sequences = []
 
-for i in range(SEQUENCE_LENGTH, len(X)):
-    X_sequences.append(X[i - SEQUENCE_LENGTH:i])
-    y_sequences.append(y[i])
+for i in range(sequence_length, len(X)):
 
-X_sequences = np.array(X_sequences, dtype=np.float32)
-y_sequences = np.array(y_sequences, dtype=np.int64)
+    X_sequences.append(
+        X[i - sequence_length:i]
+    )
 
-print("X shape:", X_sequences.shape)
-print("y shape:", y_sequences.shape)
-
-
-# ============================================================
-# 7. CHRONOLOGICAL TRAIN / VALIDATION / TEST SPLIT
-# ============================================================
-
-total_samples = len(X_sequences)
-
-train_end = int(total_samples * 0.70)
-validation_end = int(total_samples * 0.85)
-
-X_train = X_sequences[:train_end]
-y_train = y_sequences[:train_end]
-
-X_val = X_sequences[train_end:validation_end]
-y_val = y_sequences[train_end:validation_end]
-
-X_test = X_sequences[validation_end:]
-y_test = y_sequences[validation_end:]
-
-print("\nSplit:")
-print("Train:", X_train.shape)
-print("Validation:", X_val.shape)
-print("Test:", X_test.shape)
+    y_sequences.append(
+        y[i]
+    )
 
 
-# ============================================================
+X_sequences = np.array(X_sequences)
+y_sequences = np.array(y_sequences)
+
+
+print("X Shape:", X_sequences.shape)
+print("y Shape:", y_sequences.shape)
+
+
+# =========================================================
+# 6. TRAIN / VAL / TEST SPLIT
+# First split off test, then split remainder into train/val
+# =========================================================
+
+X_train_full, X_test, y_train_full, y_test = train_test_split(
+    X_sequences,
+    y_sequences,
+    test_size=0.2,
+    random_state=42,
+    shuffle=True
+)
+
+X_train, X_val, y_train, y_val = train_test_split(
+    X_train_full,
+    y_train_full,
+    test_size=0.1,   # 10% of remaining data used for validation
+    random_state=42,
+    shuffle=True
+)
+
+
+print("\nTrain Shape:", X_train.shape)
+print("Val Shape  :", X_val.shape)
+print("Test Shape :", X_test.shape)
+
+
+# =========================================================
+# 7. CLASS WEIGHTS
+# =========================================================
+
+hold_weight = 1
+buy_weight =  1.2
+sell_weight = 1.2
+
+CLASS_WEIGHTS = torch.tensor(
+    [
+        hold_weight,
+        buy_weight,
+        sell_weight
+    ],
+    dtype=torch.float32
+).to(device)
+
+
+# =========================================================
 # 8. DATASET
-# ============================================================
+# =========================================================
 
 class CustomDataset(Dataset):
+
     def __init__(self, features, labels):
-        self.data = torch.tensor(features, dtype=torch.float32)
-        self.labels = torch.tensor(labels, dtype=torch.long)
 
-    def __len__(self):
-        return len(self.data)
-
-    def __getitem__(self, index):
-        return (self.data[index], self.labels[index])
-
-
-# ============================================================
-# 9. DATALOADERS
-# ============================================================
-
-train_data = CustomDataset(X_train, y_train)
-validation_data = CustomDataset(X_val, y_val)
-test_data = CustomDataset(X_test, y_test)
-
-train_loader = DataLoader(train_data, batch_size=BATCH_SIZE, shuffle=True)
-validation_loader = DataLoader(validation_data, batch_size=BATCH_SIZE, shuffle=False)
-test_loader = DataLoader(test_data, batch_size=BATCH_SIZE, shuffle=False)
-
-
-# ============================================================
-# 10. CNN MODEL
-# ============================================================
-
-class MyCNN(nn.Module):
-    def __init__(self, num_features):
-        super().__init__()
-
-        self.features = nn.Sequential(
-            nn.Conv1d(in_channels=num_features, out_channels=64, kernel_size=3, padding=1),
-            nn.BatchNorm1d(64),
-            nn.ReLU(),
-            nn.MaxPool1d(kernel_size=2, stride=2),
-
-            nn.Conv1d(in_channels=64, out_channels=128, kernel_size=3, padding=1),
-            nn.BatchNorm1d(128),
-            nn.ReLU(),
-            nn.MaxPool1d(kernel_size=2, stride=2),
-
-            nn.Conv1d(in_channels=128, out_channels=256, kernel_size=3, padding=1),
-            nn.BatchNorm1d(256),
-            nn.ReLU(),
-            nn.Dropout(0.20)
+        self.data = torch.tensor(
+            features,
+            dtype=torch.float32
         )
 
-        # Adaptive pooling - sequence length change hone par bhi model chalega
-        self.pool = nn.AdaptiveAvgPool1d(1)
+        self.labels = torch.tensor(
+            labels,
+            dtype=torch.long
+        )
+
+    def __len__(self):
+
+        return len(self.data)
+
+    def __getitem__(self, idx):
+
+        return (
+            self.data[idx],
+            self.labels[idx]
+        )
+
+
+# =========================================================
+# 9. DATASETS
+# =========================================================
+
+train_data = CustomDataset(X_train, y_train)
+val_data = CustomDataset(X_val, y_val)
+test_data = CustomDataset(X_test, y_test)
+
+
+# =========================================================
+# 10. DATALOADERS
+# =========================================================
+
+train_loader = DataLoader(
+    train_data,
+    batch_size=BATCH_SIZE,
+    shuffle=True
+)
+
+val_loader = DataLoader(
+    val_data,
+    batch_size=BATCH_SIZE,
+    shuffle=False
+)
+
+test_loader = DataLoader(
+    test_data,
+    batch_size=BATCH_SIZE,
+    shuffle=False
+)
+
+
+# =========================================================
+# 11. CNN MODEL
+# =========================================================
+
+class MyCNN(nn.Module):
+
+    def __init__(self, num_features):
+
+        super().__init__()
+
+        # -------------------------------------------------
+        # CNN FEATURE EXTRACTOR
+        # -------------------------------------------------
+
+        self.features = nn.Sequential(
+
+            # Input:
+            # (batch, num_features, 50)
+
+            nn.Conv1d(
+                in_channels=num_features,
+                out_channels=conv1_channels,
+                kernel_size=kernel_size,
+                padding=1
+            ),
+
+            nn.ReLU(),
+
+            nn.BatchNorm1d(conv1_channels),
+
+            nn.MaxPool1d(kernel_size=2, stride=2),
+
+            # Sequence: 50 -> 25
+
+            nn.Conv1d(
+                in_channels=conv1_channels,
+                out_channels=conv2_channels,
+                kernel_size=kernel_size,
+                padding=1
+            ),
+
+            nn.ReLU(),
+
+            nn.BatchNorm1d(conv2_channels),
+
+            nn.MaxPool1d(kernel_size=2, stride=2)
+
+            # Sequence: 25 -> 12
+        )
+
+        # -------------------------------------------------
+        # CLASSIFIER
+        # -------------------------------------------------
+
+        # Final shape: batch, 128 channels, 12 seq len
+        # Flatten = 128 * 12 = 1536
 
         self.classifier = nn.Sequential(
+
             nn.Flatten(),
 
-            nn.Linear(256, 128),
-            nn.ReLU(),
-            nn.Dropout(0.30),
+            nn.Linear(conv2_channels * 25, linear1),
 
-            nn.Linear(128, 64),
             nn.ReLU(),
-            nn.Dropout(0.20),
 
-            nn.Linear(64, 2)
+            nn.Dropout(dropout),
+
+            nn.Linear(linear1, linear2),
+
+            nn.ReLU(),
+
+            nn.Dropout(dropout),
+
+            # Output:
+            # HOLD = 0
+            # BUY  = 1
+            # SELL = 2
+
+            nn.Linear(linear2, 3)
         )
 
     def forward(self, x):
-        # Input: [batch, sequence, features]
+
+        # Original: (batch, 50, num_features)
         x = x.permute(0, 2, 1)
-        # [batch, features, sequence]
+        # After: (batch, num_features, 50)
 
         x = self.features(x)
-        x = self.pool(x)
         x = self.classifier(x)
 
         return x
 
 
-# ============================================================
-# 11. CREATE MODEL
-# ============================================================
+# =========================================================
+# 12. CREATE MODEL
+# =========================================================
 
 num_features = X_train.shape[2]
 
@@ -260,16 +321,11 @@ print("\nModel:")
 print(model)
 
 
-# ============================================================
-# 12. LOSS FUNCTION
-# ============================================================
+# =========================================================
+# 13. LOSS, OPTIMIZER, SCHEDULER
+# =========================================================
 
 criterion = nn.CrossEntropyLoss(weight=CLASS_WEIGHTS)
-
-
-# ============================================================
-# 13. OPTIMIZER
-# ============================================================
 
 optimizer = torch.optim.AdamW(
     model.parameters(),
@@ -277,122 +333,113 @@ optimizer = torch.optim.AdamW(
     weight_decay=1e-4
 )
 
-
-# ============================================================
-# 14. LR SCHEDULER
-# ============================================================
-
 scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(
     optimizer,
     mode="max",
     factor=0.5,
-    patience=4
+    patience=5
 )
 
 
-# ============================================================
-# 15. VALIDATION FUNCTION
-# ============================================================
+# =========================================================
+# 14. EVALUATION FUNCTION
+# =========================================================
 
-def evaluate_model(model, loader, buy_threshold=0.50):
+def evaluate_model(model, loader):
+
     model.eval()
 
     all_labels = []
     all_predictions = []
-    all_probabilities = []
 
     with torch.no_grad():
+
         for batch_features, batch_labels in loader:
+
             batch_features = batch_features.to(device)
             batch_labels = batch_labels.to(device)
 
             outputs = model(batch_features)
 
-            probabilities = torch.softmax(outputs, dim=1)
-
-            # BUY probability
-            buy_probability = probabilities[:, 1]
-
-            # Agar BUY probability threshold se zyada hai to BUY predict hoga
-            predictions = (buy_probability >= buy_threshold).long()
+            predictions = torch.argmax(outputs, dim=1)
 
             all_labels.extend(batch_labels.cpu().numpy())
             all_predictions.extend(predictions.cpu().numpy())
-            all_probabilities.extend(buy_probability.cpu().numpy())
 
     all_labels = np.array(all_labels)
     all_predictions = np.array(all_predictions)
-    all_probabilities = np.array(all_probabilities)
 
     accuracy = accuracy_score(all_labels, all_predictions)
 
-    balanced_accuracy = balanced_accuracy_score(all_labels, all_predictions)
+    balanced_acc = balanced_accuracy_score(all_labels, all_predictions)
 
-    buy_f1 = f1_score(
-        all_labels, all_predictions, pos_label=1, zero_division=0
+    macro_f1 = f1_score(
+        all_labels, all_predictions, average="macro", zero_division=0
+    )
+
+    weighted_f1 = f1_score(
+        all_labels, all_predictions, average="weighted", zero_division=0
     )
 
     report = classification_report(
         all_labels,
         all_predictions,
-        target_names=["HOLD", "BUY"],
+        target_names=["HOLD", "BUY", "SELL"],
         output_dict=True,
         zero_division=0
     )
 
-    buy_precision = report["BUY"]["precision"]
-    buy_recall = report["BUY"]["recall"]
+    hold_f1 = report["HOLD"]["f1-score"]
+    buy_f1 = report["BUY"]["f1-score"]
+    sell_f1 = report["SELL"]["f1-score"]
 
     return (
         accuracy,
-        balanced_accuracy,
+        balanced_acc,
+        macro_f1,
+        weighted_f1,
+        hold_f1,
         buy_f1,
-        buy_precision,
-        buy_recall,
+        sell_f1,
         all_labels,
-        all_predictions,
-        all_probabilities
+        all_predictions
     )
 
 
-# ============================================================
-# 16. TRAINING
-# ============================================================
+# =========================================================
+# 15. TRAINING LOOP (with validation + early stopping)
+# =========================================================
 
-print("\n")
-print("=" * 60)
-print("STARTING TRAINING")
-print("=" * 60)
+print("\nStarting Training...\n")
 
-best_buy_f1 = -1.0
-best_buy_recall = -1.0
+best_macro_f1 = -1.0
+best_balanced_acc = -1.0
+
 best_model_weights = None
 best_epoch = 0
+
 epochs_without_improvement = 0
 
 
 for epoch in range(EPOCHS):
 
-    # ========================================================
-    # TRAIN
-    # ========================================================
-
     model.train()
-    total_loss = 0.0
+
+    total_loss = 0
 
     for batch_features, batch_labels in train_loader:
+
         batch_features = batch_features.to(device)
         batch_labels = batch_labels.to(device)
 
         optimizer.zero_grad()
 
-        outputs = model(batch_features)
+        output = model(batch_features)
 
-        loss = criterion(outputs, batch_labels)
+        loss = criterion(output, batch_labels)
 
         loss.backward()
 
-        # Gradient clipping
         torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)
 
         optimizer.step()
@@ -401,187 +448,140 @@ for epoch in range(EPOCHS):
 
     average_loss = total_loss / len(train_loader)
 
-    # ========================================================
-    # VALIDATION
-    # ========================================================
-
     (
         val_accuracy,
-        val_balanced_accuracy,
+        val_balanced_acc,
+        val_macro_f1,
+        val_weighted_f1,
+        val_hold_f1,
         val_buy_f1,
-        val_buy_precision,
-        val_buy_recall,
-        _,
+        val_sell_f1,
         _,
         _
-    ) = evaluate_model(model, validation_loader, buy_threshold=0.50)
+    ) = evaluate_model(model, val_loader)
 
-    # ========================================================
-    # LR SCHEDULER
-    # ========================================================
-
-    scheduler.step(val_buy_f1)
+    scheduler.step(val_macro_f1)
 
     current_lr = optimizer.param_groups[0]["lr"]
 
-    # ========================================================
-    # PRINT
-    # ========================================================
-
-    print(f"\nEpoch [{epoch + 1}/{EPOCHS}]")
-    print(f"Loss: {average_loss:.4f}")
-    print(f"Validation Accuracy: {val_accuracy * 100:.2f}%")
-    print(f"Validation Balanced Accuracy: {val_balanced_accuracy * 100:.2f}%")
-    print(f"BUY Precision: {val_buy_precision * 100:.2f}%")
-    print(f"BUY Recall: {val_buy_recall * 100:.2f}%")
-    print(f"BUY F1: {val_buy_f1:.4f}")
-    print(f"Learning Rate: {current_lr:.8f}")
-
-    # ========================================================
-    # BEST MODEL
-    #
-    # Primary objective = BUY F1
-    # Tie-breaker = BUY Recall
-    # ========================================================
+    print(
+        f"Epoch [{epoch + 1}/{EPOCHS}] "
+        f"Loss: {average_loss:.4f} | "
+        f"Macro F1: {val_macro_f1:.4f} | "
+        f"Balanced Acc: {val_balanced_acc * 100:.2f}% | "
+        f"HOLD F1: {val_hold_f1:.4f} | "
+        f"BUY F1: {val_buy_f1:.4f} | "
+        f"SELL F1: {val_sell_f1:.4f} | "
+        f"LR: {current_lr:.8f}"
+    )
 
     is_better = False
 
-    if val_buy_f1 > best_buy_f1:
+    if val_macro_f1 > best_macro_f1:
         is_better = True
-    elif val_buy_f1 == best_buy_f1 and val_buy_recall > best_buy_recall:
+    elif (
+        val_macro_f1 == best_macro_f1
+        and val_balanced_acc > best_balanced_acc
+    ):
         is_better = True
 
     if is_better:
-        best_buy_f1 = val_buy_f1
-        best_buy_recall = val_buy_recall
+
+        best_macro_f1 = val_macro_f1
+        best_balanced_acc = val_balanced_acc
+
         best_model_weights = copy.deepcopy(model.state_dict())
+
         best_epoch = epoch + 1
+
         epochs_without_improvement = 0
 
-        print("\n>>> NEW BEST MODEL <<<")
-        print(f"BUY F1: {best_buy_f1:.4f}")
-        print(f"BUY Recall: {best_buy_recall * 100:.2f}%")
+        print(f"  --> New best model! Macro F1: {best_macro_f1:.4f}")
+
     else:
+
         epochs_without_improvement += 1
 
-    # ========================================================
-    # EARLY STOPPING
-    # ========================================================
-
     if epochs_without_improvement >= PATIENCE:
+
         print("\nEarly stopping triggered.")
+
         break
 
 
-# ============================================================
-# 17. LOAD BEST MODEL
-# ============================================================
+# =========================================================
+# 16. SAVE + LOAD BEST MODEL
+# =========================================================
 
-if best_model_weights is None:
-    raise RuntimeError("No best model was saved.")
+if best_model_weights is not None:
 
-model.load_state_dict(best_model_weights)
+    torch.save(best_model_weights, "best_gold_model_conv1d.pt")
+
+    print(
+        f"\nBest model saved (Epoch {best_epoch}) "
+        f"with Macro F1: {best_macro_f1:.4f}"
+    )
+
+    model.load_state_dict(best_model_weights)
+
+else:
+
+    print("\nWarning: No best model found.")
 
 
-# ============================================================
-# 18. FINAL TEST
-# ============================================================
-
-print("\n")
-print("=" * 60)
-print("FINAL TEST RESULTS")
-print("=" * 60)
+# =========================================================
+# 17. FINAL TEST EVALUATION
+# =========================================================
 
 (
     test_accuracy,
-    test_balanced_accuracy,
+    test_balanced_acc,
+    test_macro_f1,
+    test_weighted_f1,
+    test_hold_f1,
     test_buy_f1,
-    test_buy_precision,
-    test_buy_recall,
+    test_sell_f1,
     test_labels,
-    test_predictions,
-    test_probabilities
-) = evaluate_model(model, test_loader, buy_threshold=0.50)
+    test_predictions
+) = evaluate_model(model, test_loader)
 
-print(f"\nBest Epoch: {best_epoch}")
+
+print("\n" + "=" * 50)
+print("FINAL TEST RESULTS (Best Model)")
+print("=" * 50)
+
 print(f"Test Accuracy: {test_accuracy * 100:.2f}%")
-print(f"Test Balanced Accuracy: {test_balanced_accuracy * 100:.2f}%")
-print(f"BUY Precision: {test_buy_precision * 100:.2f}%")
-print(f"BUY Recall: {test_buy_recall * 100:.2f}%")
+print(f"Test Balanced Accuracy: {test_balanced_acc * 100:.2f}%")
+print(f"Test Macro F1: {test_macro_f1:.4f}")
+print(f"Test Weighted F1: {test_weighted_f1:.4f}")
+print(f"HOLD F1: {test_hold_f1:.4f}")
 print(f"BUY F1: {test_buy_f1:.4f}")
+print(f"SELL F1: {test_sell_f1:.4f}")
 
-
-# ============================================================
-# 19. CLASSIFICATION REPORT
-# ============================================================
-
-print("\n")
-print("=" * 60)
-print("CLASSIFICATION REPORT")
-print("=" * 60)
+print("\nClassification Report:\n")
 
 print(
     classification_report(
         test_labels,
         test_predictions,
-        target_names=["HOLD", "BUY"],
+        target_names=["HOLD", "BUY", "SELL"],
         digits=4,
         zero_division=0
     )
 )
 
-
-# ============================================================
-# 20. CONFUSION MATRIX
-# ============================================================
-
 cm = confusion_matrix(test_labels, test_predictions)
 
-print("\n")
-print("=" * 60)
-print("CONFUSION MATRIX")
-print("=" * 60)
+print("\nConfusion Matrix:")
+print("              Predicted")
+print("              HOLD   BUY   SELL")
 
-print("\n              Predicted")
-print("              HOLD   BUY")
-print(f"Actual HOLD   {cm[0][0]:5d} {cm[0][1]:5d}")
-print(f"Actual BUY    {cm[1][0]:5d} {cm[1][1]:5d}")
-
-
-# ============================================================
-# 21. SAVE COMPLETE CHECKPOINT
-# ============================================================
-
-checkpoint = {
-    "model_state_dict": model.state_dict(),
-    "input_size": num_features,
-    "feature_names": feature_names,
-    "sequence_length": SEQUENCE_LENGTH,
-    "class_mapping": {0: "HOLD", 1: "BUY"},
-    "class_weights": CLASS_WEIGHTS.cpu(),
-    "hold_weight": HOLD_WEIGHT,
-    "buy_weight": BUY_WEIGHT,
-    "best_epoch": best_epoch,
-    "best_buy_f1": best_buy_f1,
-    "best_buy_recall": best_buy_recall,
-    "optimizer": "AdamW",
-    "learning_rate": LEARNING_RATE,
-    "batch_size": BATCH_SIZE,
-    "model_type": "CNN",
-    "test_accuracy": test_accuracy,
-    "test_balanced_accuracy": test_balanced_accuracy,
-    "test_buy_precision": test_buy_precision,
-    "test_buy_recall": test_buy_recall,
-    "test_buy_f1": test_buy_f1
-}
-
-torch.save(checkpoint, MODEL_PATH)
-
-print("\n")
-print("=" * 60)
-print("MODEL SAVED")
-print("=" * 60)
-
-print(f"\nPath:\n{MODEL_PATH}")
-print(f"\nBest BUY F1: {best_buy_f1:.4f}")
-print(f"Best BUY Recall: {best_buy_recall * 100:.2f}%")
+print(
+    f"Actual HOLD   {cm[0][0]:5d} {cm[0][1]:5d} {cm[0][2]:5d}"
+)
+print(
+    f"Actual BUY    {cm[1][0]:5d} {cm[1][1]:5d} {cm[1][2]:5d}"
+)
+print(
+    f"Actual SELL   {cm[2][0]:5d} {cm[2][1]:5d} {cm[2][2]:5d}"
+)

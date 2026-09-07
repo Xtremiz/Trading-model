@@ -21,7 +21,7 @@ from sklearn.metrics import (
 LEARNING_RATE = 0.00684998
 BATCH_SIZE = 64
 EPOCHS = 100
-PATIENCE = 40   # early stopping patience
+PATIENCE = 50   # early stopping patience
 
 
 sequence_length = 100
@@ -131,9 +131,9 @@ print("Test Shape :", X_test.shape)
 # 7. CLASS WEIGHTS
 # =========================================================
 
-hold_weight = 1
-buy_weight = 1
-sell_weight = 1
+hold_weight = 1.75
+buy_weight = 2.28
+sell_weight = 2.17
 
 CLASS_WEIGHTS = torch.tensor(
     [
@@ -550,7 +550,7 @@ for epoch in range(EPOCHS):
 
 if best_model_weights is not None:
 
-    torch.save(best_model_weights, "best_gold_model_hybrid.pt")
+    torch.save(best_model_weights, "best_gold_model_hybrid2.pt")
 
     print(
         f"\nBest model saved (Epoch {best_epoch}) "

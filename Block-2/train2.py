@@ -21,7 +21,7 @@ from sklearn.metrics import (
 LEARNING_RATE = 0.00684998
 BATCH_SIZE = 64
 EPOCHS = 100
-PATIENCE = 40   # early stopping patience
+PATIENCE = 50   # early stopping patience
 
 
 conv1_channels = 64
@@ -140,9 +140,9 @@ print("Test Shape :", X_test.shape)
 # 7. CLASS WEIGHTS
 # =========================================================
 
-hold_weight = 0.9
-buy_weight =  1.23
-sell_weight = 1.23
+hold_weight = 1
+buy_weight =  1.2
+sell_weight = 1.2
 
 CLASS_WEIGHTS = torch.tensor(
     [
