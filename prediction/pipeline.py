@@ -115,6 +115,13 @@ def pipeline(rates):
                 df[feature]
                 - df[feature].shift(lag)
             )
+
+    for feature in features:
+    
+        for lag in range(1, 6):
+           df[f"{feature}_prev_{lag}"] = df[feature].shift(lag)      
+
+    
     # Returns
     df["return_1"] = df["close"].pct_change(1)
     df["return_3"] = df["close"].pct_change(3)

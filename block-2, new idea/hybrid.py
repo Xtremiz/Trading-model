@@ -40,7 +40,7 @@ print(f"Using device: {device}")
 # =========================================================
 
 df = pd.read_csv(
-    r"F:\Git-Hub\Trading model\block-2, new idea\gold_target_40_30_30.csv"
+    r"F:\Git-Hub\Trading model\data\gold112_Robust-Scaled.csv"
 )
 
 df = df.dropna()
@@ -50,7 +50,7 @@ df = df.dropna()
 # 3. SIGNAL MAPPING
 # =========================================================
 
-df.rename(columns={"target": "signal"}, inplace=True)
+
 signal_mapping = {
     0: 0,
     1: 1,
@@ -131,9 +131,9 @@ print("Test Shape :", X_test.shape)
 # 7. CLASS WEIGHTS
 # =========================================================
 
-hold_weight = 1.75
-buy_weight = 2.28
-sell_weight = 2.17
+hold_weight = 0.84
+buy_weight = 1.1305
+sell_weight = 1.1608
 
 CLASS_WEIGHTS = torch.tensor(
     [
@@ -550,7 +550,7 @@ for epoch in range(EPOCHS):
 
 if best_model_weights is not None:
 
-    torch.save(best_model_weights, "best_gold_model_hybrid2.pt")
+    torch.save(best_model_weights, "best_gold112_model_hybrid.pt")
 
     print(
         f"\nBest model saved (Epoch {best_epoch}) "

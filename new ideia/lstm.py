@@ -141,8 +141,8 @@ print("Test Shape :", X_test.shape)
 # =========================================================
 
 hold_weight = 1
-buy_weight =  1.2
-sell_weight = 1.4
+buy_weight =  1.4
+sell_weight = 1.2
 
 CLASS_WEIGHTS = torch.tensor(
     [
@@ -220,90 +220,72 @@ test_loader = DataLoader(
 # 11. CNN MODEL
 # =========================================================
 
-class MyCNN(nn.Module):
+class MyLSTM(nn.Module):
 
     def __init__(self, num_features):
 
         super().__init__()
 
         # -------------------------------------------------
-        # CNN FEATURE EXTRACTOR
+        # LSTM FEATURE EXTRACTOR
         # -------------------------------------------------
 
-        self.features = nn.Sequential(
+        hidden_size = 128
+        num_layers = 1
+        bidirectional = True
 
-            # Input:
-            # (batch, num_features, 50)
+        # Input:
+        # (batch, 50, num_features)
 
-            nn.Conv1d(
-                in_channels=num_features,
-                out_channels=conv1_channels,
-                kernel_size=kernel_size,
-                padding=1
-            ),
-
-            nn.ReLU(),
-
-            nn.BatchNorm1d(conv1_channels),
-
-            nn.MaxPool1d(kernel_size=2, stride=2),
-
-            # Sequence: 50 -> 25
-
-            nn.Conv1d(
-                in_channels=conv1_channels,
-                out_channels=conv2_channels,
-                kernel_size=kernel_size,
-                padding=1
-            ),
-
-            nn.ReLU(),
-
-            nn.BatchNorm1d(conv2_channels),
-
-            nn.MaxPool1d(kernel_size=2, stride=2)
-
-            # Sequence: 25 -> 12
+        self.lstm = nn.LSTM(
+            input_size=num_features,
+            hidden_size=hidden_size,
+            num_layers=num_layers,
+            batch_first=True,
+            bidirectional=bidirectional
         )
+
+        lstm_out_size = hidden_size * 2
+        # 128 * 2 = 256
 
         # -------------------------------------------------
         # CLASSIFIER
         # -------------------------------------------------
 
-        # Final shape: batch, 128 channels, 12 seq len
-        # Flatten = 128 * 12 = 1536
+        # Final shape: batch, lstm_out_size (last timestep only)
 
         self.classifier = nn.Sequential(
 
-            nn.Flatten(),
-
-            nn.Linear(conv2_channels * 25, linear1),
+            nn.Linear(lstm_out_size, 128),
 
             nn.ReLU(),
 
-            nn.Dropout(dropout),
+            nn.Dropout(0.2),
 
-            nn.Linear(linear1, linear2),
+            nn.Linear(128, 64),
 
             nn.ReLU(),
 
-            nn.Dropout(dropout),
+            nn.Dropout(0.2),
 
             # Output:
             # HOLD = 0
             # BUY  = 1
             # SELL = 2
 
-            nn.Linear(linear2, 3)
+            nn.Linear(64, 3)
         )
 
     def forward(self, x):
 
         # Original: (batch, 50, num_features)
-        x = x.permute(0, 2, 1)
-        # After: (batch, num_features, 50)
 
-        x = self.features(x)
+        x, (h_n, c_n) = self.lstm(x)
+        # LSTM out: (batch, 50, 256)
+
+        x = x[:, -1, :]
+        # Last timestep: (batch, 256)
+
         x = self.classifier(x)
 
         return x
@@ -315,7 +297,7 @@ class MyCNN(nn.Module):
 
 num_features = X_train.shape[2]
 
-model = MyCNN(num_features=num_features).to(device)
+model = MyLSTM(num_features=num_features).to(device)
 
 print("\nModel:")
 print(model)
@@ -515,7 +497,7 @@ for epoch in range(EPOCHS):
 
 if best_model_weights is not None:
 
-    torch.save(best_model_weights, "gold112_scaled_model_conv1d2.pt")
+    torch.save(best_model_weights, "gold112_scaled_model_lstmhy.pt")
 
     print(
         f"\nBest model saved (Epoch {best_epoch}) "

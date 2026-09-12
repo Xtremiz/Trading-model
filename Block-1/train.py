@@ -35,12 +35,7 @@ print("Using device:", device)
 # =========================================================
 
 df = pd.read_csv(
-    r"F:\Git-Hub\Trading model\block-2, new idea\gold_target_40_30_30.csv"
-)
-
-df.rename(
-    columns={"target": "signal"},
-    inplace=True
+    r"F:\Git-Hub\Trading model\data\gold112_Robust-Scaled.csv"
 )
 
 df.dropna(inplace=True)
@@ -187,10 +182,10 @@ test_loader = DataLoader(
 # 5. CLASS WEIGHTS
 # =========================================================
 
-classes = np.array([0, 1, 2])
-hold_weight = 1.2
-buy_weight = 1.7
-sell_weight = 1.5
+
+hold_weight = 1
+buy_weight = 1.2
+sell_weight = 1.4
 
 
 class_weights = torch.tensor(

@@ -140,9 +140,9 @@ print("Test Shape :", X_test.shape)
 # 7. CLASS WEIGHTS
 # =========================================================
 
-hold_weight = 1
-buy_weight =  1.2
-sell_weight = 1.4
+hold_weight = 1.1
+buy_weight =  1.3
+sell_weight = 1.25
 
 CLASS_WEIGHTS = torch.tensor(
     [
@@ -220,23 +220,49 @@ test_loader = DataLoader(
 # 11. CNN MODEL
 # =========================================================
 
-class MyCNN(nn.Module):
+class MyHybrid(nn.Module):
 
     def __init__(self, num_features):
 
         super().__init__()
 
         # -------------------------------------------------
+        # LSTM FEATURE EXTRACTOR
+        # -------------------------------------------------
+
+        hidden_size = 128
+        num_layers = 1
+        bidirectional = True
+
+        # Input:
+        # (batch, 50, num_features)
+
+        self.lstm = nn.LSTM(
+            input_size=num_features,
+            hidden_size=hidden_size,
+            num_layers=num_layers,
+            batch_first=True,
+            bidirectional=bidirectional
+        )
+
+        lstm_out_size = hidden_size * 2
+        # 128 * 2 = 256
+
+        # -------------------------------------------------
         # CNN FEATURE EXTRACTOR
         # -------------------------------------------------
 
+        conv1_channels = 64
+        conv2_channels = 128
+        kernel_size = 3
+
+        # Input to CNN:
+        # (batch, lstm_out_size, 50)
+
         self.features = nn.Sequential(
 
-            # Input:
-            # (batch, num_features, 50)
-
             nn.Conv1d(
-                in_channels=num_features,
+                in_channels=lstm_out_size,
                 out_channels=conv1_channels,
                 kernel_size=kernel_size,
                 padding=1
@@ -267,17 +293,25 @@ class MyCNN(nn.Module):
         )
 
         # -------------------------------------------------
+        # ADAPTIVE POOLING
+        # -------------------------------------------------
+
+        # Collapses the sequence to a single vector per sample,
+        # so we don't depend on the exact reduced_seq_len
+
+        self.pool = nn.AdaptiveAvgPool1d(1)
+
+        # -------------------------------------------------
         # CLASSIFIER
         # -------------------------------------------------
 
-        # Final shape: batch, 128 channels, 12 seq len
-        # Flatten = 128 * 12 = 1536
+        linear1 = 128
+        linear2 = 64
+        dropout = 0.2
 
         self.classifier = nn.Sequential(
 
-            nn.Flatten(),
-
-            nn.Linear(conv2_channels * 25, linear1),
+            nn.Linear(conv2_channels, linear1),
 
             nn.ReLU(),
 
@@ -300,10 +334,22 @@ class MyCNN(nn.Module):
     def forward(self, x):
 
         # Original: (batch, 50, num_features)
+
+        x, (h_n, c_n) = self.lstm(x)
+        # LSTM out: (batch, 50, 256)
+
         x = x.permute(0, 2, 1)
-        # After: (batch, num_features, 50)
+        # For CNN: (batch, 256, 50)
 
         x = self.features(x)
+        # After CNN: (batch, conv2_channels, reduced_seq_len)
+
+        x = self.pool(x)
+        # After pooling: (batch, conv2_channels, 1)
+
+        x = x.squeeze(-1)
+        # Flattened: (batch, conv2_channels)
+
         x = self.classifier(x)
 
         return x
@@ -315,7 +361,7 @@ class MyCNN(nn.Module):
 
 num_features = X_train.shape[2]
 
-model = MyCNN(num_features=num_features).to(device)
+model = MyHybrid(num_features=num_features).to(device)
 
 print("\nModel:")
 print(model)
@@ -515,7 +561,7 @@ for epoch in range(EPOCHS):
 
 if best_model_weights is not None:
 
-    torch.save(best_model_weights, "gold112_scaled_model_conv1d2.pt")
+    torch.save(best_model_weights, "gold112_scaled_model_lstmhy2.pt")
 
     print(
         f"\nBest model saved (Epoch {best_epoch}) "

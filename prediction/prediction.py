@@ -3,12 +3,15 @@ import time
 import MetaTrader5 as mt5
 import pandas as pd
 import numpy as np
-
+from probablity_func import predict_signal, get_signal
 import torch
 import torch.nn as nn
 
 from pipeline import pipeline
 
+c1d = []
+h1 = []
+h2 = []
 
 # =========================================================
 # SETTINGS
@@ -191,7 +194,6 @@ class HybridNet(nn.Module):
         super().__init__()
 
         self.features = nn.Sequential(
-
             nn.Conv1d(
                 in_channels=num_features,
                 out_channels=64,
@@ -200,13 +202,10 @@ class HybridNet(nn.Module):
             ),
 
             nn.ReLU(),
-
             nn.BatchNorm1d(64),
-
             nn.MaxPool1d(
                 kernel_size=2,
-                stride=2
-            ),
+                stride=2),
 
             nn.Conv1d(
                 in_channels=64,
@@ -216,26 +215,18 @@ class HybridNet(nn.Module):
             ),
 
             nn.ReLU(),
-
             nn.BatchNorm1d(128),
-
             nn.MaxPool1d(
                 kernel_size=2,
-                stride=2
-            )
+                stride=2)
         )
 
 
         self.lstm = nn.LSTM(
-
             input_size=128,
-
             hidden_size=128,
-
             num_layers=1,
-
             batch_first=True,
-
             bidirectional=True
         )
 
@@ -251,18 +242,13 @@ class HybridNet(nn.Module):
             ),
 
             nn.ReLU(),
-
             nn.Dropout(0.2),
-
             nn.Linear(
                 64,
                 128
             ),
-
             nn.ReLU(),
-
             nn.Dropout(0.2),
-
             nn.Linear(
                 128,
                 3
@@ -271,56 +257,13 @@ class HybridNet(nn.Module):
 
 
     def forward(self, x):
-
-        # (batch, sequence, features)
-
-        x = x.permute(
-            0,
-            2,
-            1
-        )
-
-
-        # CNN
-
+        x = x.permute(0,2,1)
         x = self.features(x)
-
-
-        # (batch, sequence, 128)
-
-        x = x.permute(
-            0,
-            2,
-            1
-        )
-
-
-        # BiLSTM
-
+        x = x.permute(0,2,1)
         x, _ = self.lstm(x)
-
-
-        # (batch, 256, sequence)
-
-        x = x.permute(
-            0,
-            2,
-            1
-        )
-
-
-        # Adaptive pooling
-
+        x = x.permute(0,2,1)
         x = self.pool(x)
-
-
-        # (batch, 256)
-
         x = x.squeeze(-1)
-
-
-        # Classifier
-
         x = self.classifier(x)
 
         return x
@@ -754,7 +697,7 @@ try:
             features
         )
 
-
+        c1d = [conv_hold, conv_buy, conv_sell]
         (
             hybrid1_prediction,
             hybrid1_hold,
@@ -766,7 +709,7 @@ try:
 
             features
         )
-
+        h1 = [hybrid1_hold, hybrid1_buy, hybrid1_sell]
 
         (
             hybrid2_prediction,
@@ -779,7 +722,7 @@ try:
 
             features
         )
-
+        h2 = [hybrid2_hold, hybrid2_buy, hybrid2_sell]
 
         # =================================================
         # MAJORITY VOTE
@@ -877,25 +820,31 @@ try:
             f"SELL {hybrid2_sell * 100:6.2f}%"
 
         )
-
-
-        print("-" * 75)
-
-
-        # -------------------------------------------------
-        # FINAL
-        # -------------------------------------------------
+        
 
         print(
             "=" * 75
         )
+        p1 =predict_signal(c1d, h1, h2)
+        p2 =get_signal(c1d, h1, h2)
+        print(
+            f"Majority Vote: {p1} | Ensemble Signal: {p2}"
+        )
 
-
-        # =================================================
-        # WAIT
-        # =================================================
-
+         # -------------------------------------------------
+        # Record BUY/SELL signals to record.txt
+        # -------------------------------------------------
+        if p1 in ("BUY", "SELL") or p2 in ("BUY", "SELL"):
+            with open("record.txt", "a") as f:
+                f.write(
+                    f"{current_candle.strftime('%Y-%m-%d %H:%M:%S')} UTC | "
+                    f"Majority Vote: {p1} | Ensemble Signal: {p2}\n"
+                )
+            print(
+                f"Signal recorded to record.txt"
+            )
         time.sleep(1)
+
 
 
 except KeyboardInterrupt:
