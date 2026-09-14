@@ -21,7 +21,7 @@ DEVICE = torch.device(
     "cuda" if torch.cuda.is_available() else "cpu"
 )
 
-SYMBOL = "GOLD"
+SYMBOL1 = "GOLD"
 TIMEFRAME = mt5.TIMEFRAME_M15
 
 SEQUENCE_LENGTH = 100
@@ -63,9 +63,9 @@ if account_info is not None:
 # SYMBOL CHECK
 # =========================================================
 
-if not mt5.symbol_select(SYMBOL, True):
+if not mt5.symbol_select(SYMBOL1, True):
 
-    print(f"Symbol select failed: {SYMBOL}")
+    print(f"Symbol select failed: {SYMBOL1}")
     print("MT5 Error:", mt5.last_error())
 
     mt5.shutdown()
@@ -73,7 +73,7 @@ if not mt5.symbol_select(SYMBOL, True):
     raise SystemExit
 
 
-print(f"Symbol selected: {SYMBOL}")
+print(f"Symbol selected: {SYMBOL1}")
 
 
 # =========================================================
@@ -509,21 +509,7 @@ try:
 
     while True:
 
-
-        # =================================================
-        # GET MT5 DATA
-        # =================================================
-
-        rates = mt5.copy_rates_from_pos(
-
-            SYMBOL,
-
-            TIMEFRAME,
-
-            1,
-
-            150
-        )
+        rates = mt5.copy_rates_from_pos(SYMBOL1,TIMEFRAME,1,150)
 
 
         if rates is None:

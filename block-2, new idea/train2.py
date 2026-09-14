@@ -49,7 +49,7 @@ print(f"Using device: {device}")
 # =========================================================
 
 df = pd.read_csv(
-    r"F:\Git-Hub\Trading model\data\gold112_Robust-Scaled.csv"
+    r"F:\Git-Hub\Trading model\data\US100Cash_balanced_Scaled.csv"
 )
 
 df = df.dropna()
@@ -141,8 +141,8 @@ print("Test Shape :", X_test.shape)
 # =========================================================
 
 hold_weight = 1
-buy_weight =  1.2
-sell_weight = 1.4
+buy_weight =  1.3
+sell_weight = 1.3
 
 CLASS_WEIGHTS = torch.tensor(
     [
@@ -515,7 +515,7 @@ for epoch in range(EPOCHS):
 
 if best_model_weights is not None:
 
-    torch.save(best_model_weights, "gold112_scaled_model_conv1d2.pt")
+    torch.save(best_model_weights, "US100Cash_balanced_Scaled_model_conv1d.pt")
 
     print(
         f"\nBest model saved (Epoch {best_epoch}) "
