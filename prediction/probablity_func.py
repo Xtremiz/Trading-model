@@ -1,190 +1,74 @@
-def get_signal(conv, h1, h2):
-    """
-    Input format:
-    conv = [HOLD, BUY, SELL]
-    h1   = [HOLD, BUY, SELL]
-    h2   = [HOLD, BUY, SELL]
+def final_prediction2(conv1d, hybrid1):
 
-    Returns:
-        BUY / SELL / HOLD
-    """
+    def normalize(x):
+        x = list(map(float, x))
+        if max(x) <= 1.0:
+            x = [v * 100.0 for v in x]
+        return x
 
-    c_hold, c_buy, c_sell = conv
-    h1_hold, h1_buy, h1_sell = h1
-    h2_hold, h2_buy, h2_sell = h2
+    def score(p):
+        """
+        2p-1 transform, scaled to -100..+100.
+        50% -> 0, 100% -> +100, 0% -> -100
+        """
+        frac = p / 100.0
+        return (2 * frac - 1) * 100.0
 
-    # Weighted ensemble:
-    # Hybrid2 ko zyada weight because directional moves
-    # tumhare data me is model me zyada strongly appear ho rahe hain.
-    avg_hold = 0.20*c_hold + 0.30*h1_hold + 0.50*h2_hold
-    avg_buy  = 0.20*c_buy  + 0.30*h1_buy  + 0.50*h2_buy
-    avg_sell = 0.20*c_sell + 0.30*h1_sell + 0.50*h2_sell
+    conv1d = normalize(conv1d)
+    hybrid1 = normalize(hybrid1)
+
+    c_hold_raw, c_buy_raw, c_sell_raw = conv1d
+    h_hold_raw, h_buy_raw, h_sell_raw = hybrid1
+
+    # 2p-1 scaled scores (-100 to +100)
+    c_hold = score(c_hold_raw)
+    c_buy  = score(c_buy_raw)
+    c_sell = score(c_sell_raw)
+
+    h_hold = score(h_hold_raw)
+    h_buy  = score(h_buy_raw)
+    h_sell = score(h_sell_raw)
 
     # =========================================================
-    # STRONG SELL
+    # RULE 1 (highest priority):
+    # Conv1D 99% HOLD -> score(99) = 98
     # =========================================================
-    if (
-        h2_sell >= 48
-        and h2_hold <= 15
-    ):
+    if c_hold >= 98:
+        return "HOLD"
+
+    # =========================================================
+    # RULE 2:
+    # Hybrid1 SELL >= 90% -> score(90) = 80
+    # =========================================================
+    if h_sell >= 80:
         return "SELL"
 
-    # H2 bearish + H1 HOLD weak
-    elif (
-        h2_sell >= 42
-        and h2_sell > h2_buy
-        and h2_hold <= 20
-        and h1_hold < 39
-    ):
-        return "SELL"
-
-    # Multiple models leaning SELL
-    elif (
-        c_sell >= c_buy
-        and h2_sell > h2_buy
-        and avg_sell >= 38
-    ):
-        return "SELL"
-
-
     # =========================================================
-    # STRONG BUY
+    # RULE 3:
+    # BUY ab teen cheezon pe depend karta hai:
+    #   a) Conv1D majority BUY ho (buy > hold aur buy > sell)
+    #   b) Conv1D buy score bhi khud ek minimum threshold cross kare
+    #      (e.g. c_buy_raw >= 20% -> score(20) = -60)
+    #   c) Hybrid1 BUY >= 34% -> score(34) = -32
     # =========================================================
-    elif (
-        h2_buy >= 37
-        and h2_buy > h2_sell
-        and h2_hold <= 30
-        and c_buy >= 37
-    ):
+    c_majority_buy = (c_buy > c_hold) and (c_buy > c_sell)
+
+    C_BUY_MIN = -60   # corresponds to c_buy_raw >= 20%
+
+    if c_majority_buy and c_buy >= C_BUY_MIN and h_buy >= -32:
         return "BUY"
 
-    # Conv + Hybrid2 agree on BUY
-    elif (
-        c_buy > c_sell
-        and h2_buy > h2_sell
-        and c_buy >= 35
-        and h2_buy >= 35
-    ):
-        return "BUY"
+    # =========================================================
+    # RULE 4:
+    # Dono models ka majority HOLD ho => HOLD
+    # =========================================================
+    c_majority_hold = (c_hold > c_buy) and (c_hold > c_sell)
+    h_majority_hold = (h_hold > h_buy) and (h_hold > h_sell)
 
-    # Overall ensemble bullish
-    elif (
-        avg_buy > avg_sell + 3
-        and avg_buy > avg_hold
-    ):
-        return "BUY"
-
+    if c_majority_hold and h_majority_hold:
+        return "HOLD"
 
     # =========================================================
-    # HOLD / UNCERTAINTY
+    # FALLBACK
     # =========================================================
-    elif (
-        avg_hold >= 38
-        and avg_hold > avg_buy
-        and avg_hold > avg_sell
-    ):
-        return "HOLD"
-
-    # BUY and SELL too close = indecision
-    elif abs(avg_buy - avg_sell) <= 2.5:
-        return "HOLD"
-
-    # Models fighting each other
-    elif (
-        h1_hold >= 39
-        and abs(h2_buy - h2_sell) <= 5
-    ):
-        return "HOLD"
-
-    else:
-        return "HOLD"
-
-
-def predict_signal(conv, h1, h2):
-
-    ch, cb, cs = conv
-    h1h, h1b, h1s = h1
-    h2h, h2b, h2s = h2
-
-    # Direction differences
-    conv_diff = cb - cs
-    h1_diff = h1b - h1s
-    h2_diff = h2b - h2s
-
-    # -----------------------------------
-    # PURE / STRONG SELL
-    # -----------------------------------
-
-    if h2s >= 48 and h2h <= 15:
-        return "SELL"
-
-    if (
-        h2s >= 42
-        and h2_diff <= -2
-        and h1h < 39
-    ):
-        return "SELL"
-
-
-    # -----------------------------------
-    # BUY
-    # -----------------------------------
-
-    if (
-        h2h <= 30
-        and h2b >= 37
-        and h2_diff >= 1
-        and cb >= cs
-    ):
-        return "BUY"
-
-
-    # -----------------------------------
-    # HOLD
-    # -----------------------------------
-
-    if (
-        ch >= 40
-        and h1h >= 40
-    ):
-        return "HOLD"
-
-    if (
-        abs(h2_diff) < 2
-        and abs(h1_diff) < 3
-    ):
-        return "HOLD"
-
-    if h1h >= 40:
-        return "HOLD"
-
-
-    # -----------------------------------
-    # FALLBACK ensemble
-    # -----------------------------------
-
-    buy_score = (
-        cb * 0.20 +
-        h1b * 0.30 +
-        h2b * 0.50
-    )
-
-    sell_score = (
-        cs * 0.20 +
-        h1s * 0.30 +
-        h2s * 0.50
-    )
-
-    hold_score = (
-        ch * 0.20 +
-        h1h * 0.30 +
-        h2h * 0.50
-    )
-
-    if buy_score > sell_score + 3 and buy_score > hold_score:
-        return "BUY"
-
-    elif sell_score > buy_score + 3 and sell_score > hold_score:
-        return "SELL"
-
     return "HOLD"

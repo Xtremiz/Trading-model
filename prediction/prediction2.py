@@ -3,17 +3,18 @@ import joblib
 import MetaTrader5 as mt5
 import pandas as pd
 import numpy as np
-from probablity_func import predict_signal, get_signal
+
 import torch
 import torch.nn as nn
-from models_assignment import gold_conv1d_model, gold_hybrid1_model, gold_hybrid2_model
+from models_assignment import gold_conv1d_model, gold_hybrid1_model,gold_hybrid2_model,US30_conv1d_model,US30_lstm_model,US30_hybrid1_model,US30_hybrid2_model
 from pipeline import pipeline
 from tradingfunc import getsymbol,get_candle_timer
+from probablity_func import final_prediction2
 
 c1d = []
 h1 = []
 h2 = []
-
+lstm = []
 # =========================================================
 # SETTINGS
 # =========================================================
@@ -23,6 +24,7 @@ DEVICE = torch.device(
 )
 
 SYMBOL1 = "GOLD"
+SYMBOL2 = "US30Cash"
 TIMEFRAME = mt5.TIMEFRAME_M15
 
 
@@ -179,7 +181,7 @@ try:
         # =================================================
 
         candle_time, features = getsymbol(SYMBOL1, SCALER_PATH,TIMEFRAME,112)
-
+        _,features2 = getsymbol(SYMBOL2, SCALER_PATH,TIMEFRAME,112)
         if features is None:
 
             time.sleep(1)
@@ -200,7 +202,7 @@ try:
             features
         )
 
-        c1d = [conv_hold, conv_buy, conv_sell]
+        g_c1d = [conv_hold, conv_buy, conv_sell]
 
         (
             hybrid1_prediction,
@@ -212,20 +214,51 @@ try:
             features
         )
 
-        h1 = [hybrid1_hold, hybrid1_buy, hybrid1_sell]
+        g_h1 = [hybrid1_hold, hybrid1_buy, hybrid1_sell]
 
         (
-            hybrid2_prediction,
-            hybrid2_hold,
-            hybrid2_buy,
-            hybrid2_sell
+                    hybrid2_prediction,
+                    hybrid2_hold,
+                    hybrid2_buy,
+                    hybrid2_sell
+                ) = predict_model(
+                    gold_hybrid2_model,
+                    features
+                )
+        g_h2 = [hybrid2_hold, hybrid2_buy, hybrid2_sell]
+
+        (
+            US30_hybrid1_prediction,
+            US30_hybrid1_hold,
+            US30_hybrid1_buy,
+            US30_hybrid1_sell
         ) = predict_model(
-            gold_hybrid2_model,
+            US30_hybrid1_model,
             features
         )
+          
+        US30h2 = [US30_hybrid1_hold, US30_hybrid1_buy, US30_hybrid1_sell]
 
-        h2 = [hybrid2_hold, hybrid2_buy, hybrid2_sell]
+        (
+                    US30_hybrid2_prediction,
+                    US30_hybrid2_hold,
+                    US30_hybrid2_buy,
+                    US30_hybrid2_sell
+                ) = predict_model(
+                    US30_hybrid2_model,
+                    features
+                )
+        US30h2 = [US30_hybrid2_hold,US30_hybrid2_buy,US30_hybrid2_sell]
 
+        (
+                    US30_conv_prediction,
+                    US30_conv_hold,
+                    US30_conv_buy,
+                    US30_conv_sell
+                ) = predict_model(
+                    US30_conv1d_model,
+                    features
+                )
         # =================================================
         # MAJORITY VOTE
         # =================================================
@@ -233,7 +266,9 @@ try:
         predictions = [
             conv_prediction,
             hybrid1_prediction,
-            hybrid2_prediction
+            US30_hybrid1_prediction,
+            US30_hybrid2_prediction,
+            US30_conv_prediction
         ]
 
         # =================================================
@@ -262,49 +297,39 @@ try:
         print("-" * 75)
 
         print(
-            f"Conv1D : {conv_prediction:<5} | "
+            f"Gold Conv1D : {conv_prediction:<5} | "
             f"HOLD {conv_hold * 100:6.2f}% | "
             f"BUY {conv_buy * 100:6.2f}% | "
             f"SELL {conv_sell * 100:6.2f}%"
         )
 
         print(
-            f"Hybrid1: {hybrid1_prediction:<5} | "
+            f"Gold Hybrid1: {hybrid1_prediction:<5} | "
             f"HOLD {hybrid1_hold * 100:6.2f}% | "
             f"BUY {hybrid1_buy * 100:6.2f}% | "
             f"SELL {hybrid1_sell * 100:6.2f}%"
         )
+        p = final_prediction2(g_c1d,g_h1)
+        print("="*75)
+        print(p)
+        if p in ("BUY", "SELL"):
 
-        print(
-            f"Hybrid2: {hybrid2_prediction:<5} | "
-            f"HOLD {hybrid2_hold * 100:6.2f}% | "
-            f"BUY {hybrid2_buy * 100:6.2f}% | "
-            f"SELL {hybrid2_sell * 100:6.2f}%"
-        )
-
-        print("=" * 75)
-
-        p1 = predict_signal(c1d, h1, h2)
-        p2 = get_signal(c1d, h1, h2)
-
-        print(
-            f"Majority Vote: {p1} | Ensemble Signal: {p2}"
-        )
-
-        # -------------------------------------------------
-        # Record BUY/SELL signals to record.txt
-        # -------------------------------------------------
-
-        if p1 in ("BUY", "SELL") or p2 in ("BUY", "SELL"):
-
-            with open("record.txt", "a") as f:
+            with open("GOLd_record.txt", "a") as f:
                 f.write(
-                    f"{current_candle.strftime('%Y-%m-%d %H:%M:%S')} UTC | "
-                    f"Majority Vote: {p1} | Ensemble Signal: {p2}\n"
+                    f"{candle_time.strftime('%Y-%m-%d %H:%M:%S')} UTC \n"
+                    "conv1d: "
+                    f"HOLD {conv_hold * 100:6.2f}% | "
+                    f"BUY {conv_buy * 100:6.2f}% | "
+                    f"SELL {conv_sell * 100:6.2f}%\n"
+                    "hybrid1: "
+                    f"HOLD {hybrid1_hold * 100:6.2f}% | "
+                    f"BUY {hybrid1_buy * 100:6.2f}% | "
+                    f"SELL {hybrid1_sell * 100:6.2f}%\n\n"
+
                 )
 
             print("Signal recorded to record.txt")
-
+ 
         time.sleep(1)
 
 

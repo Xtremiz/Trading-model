@@ -1,0 +1,4 @@
+2026-09-17 16:15:00 UTC 
+conv1d: HOLD  98.13% | BUY   1.87% | SELL   0.00%
+hybrid1: HOLD   0.62% | BUY   5.72% | SELL  93.65%
+
